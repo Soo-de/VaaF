@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="VakıfBank FaaS Platform — Serverless Functions" />
+  <title>VakıfBank as a Function</title>
+
+  <!-- Preconnect to Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+    rel="stylesheet" />
+
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="./style.css?v=2.5" />
+
+  <!-- Immediate Theme Initialization Script (Prevents flash and syncs Monaco) -->
+  <script>
+    (function () {
+      try {
+        const saved = localStorage.getItem('faas-theme');
+        const theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) { }
+    })();
+  </script>
+</head>
+
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="navbar-brand">
+      <div class="brand-icon">VaaF</div>
+      <span class="brand-name">VakıfBank as a Function</span>
+    </div>
+    <div class="navbar-actions">
+      <div class="system-status-badge" id="system-health-badge" title="Sistem Durumu Kontrol Ediliyor">
+        <span class="status-dot dot-green"></span>
+        <span id="system-health-text">All Systems Operational</span>
+      </div>
+      <button class="theme-toggle-btn" id="theme-toggle-btn" title="Açık/Koyu Tema Geçişi" aria-label="Açık/Koyu Tema Geçişi">
+        <span class="theme-circle-dot"></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main App Layout -->
+  <main class="main-container">
+    <!-- Top Hero Banner (Always at top of page) -->
+    <section class="hero-top-banner">
+      <div class="hero-badge-pill">
+        <span>&lt; VakıfBank's FaaS Platform &gt;</span>
+      </div>
+
+      <h1 class="hero-landing-headline">
+        Deploy Functions at the Speed of Thought
+      </h1>
+
+      <p class="hero-landing-subtext">
+        Paste your code, select a runtime, and go live in minutes.
+      </p>
+
+      <!-- Visual Workflow Pipeline -->
+      <div class="hero-workflow-pipeline">
+        <!-- Step 1 -->
+        <div class="workflow-step-card">
+          <div class="workflow-step-badge">1</div>
+          <span class="workflow-step-title">Kodunu Yaz</span>
+        </div>
+
+        <div class="workflow-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="workflow-step-card">
+          <div class="workflow-step-badge">2</div>
+          <span class="workflow-step-title">Anında Test Et</span>
+        </div>
+
+        <div class="workflow-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="workflow-step-card">
+          <div class="workflow-step-badge">3</div>
+          <span class="workflow-step-title">Tek Tıkla Dağıt</span>
+        </div>
+
+        <div class="workflow-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="workflow-step-card">
+          <div class="workflow-step-badge">4</div>
+          <span class="workflow-step-title">Otomatik Ölçeklensin</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Top Dashboard Row: Create Function & Functions List side-by-side -->
+    <div class="top-dashboard-grid">
+      <!-- Create Function Card -->
+      <section class="card create-card">
+        <h2 class="card-title">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14"></path>
+          </svg>
+          İşlem Oluştur
+        </h2>
+
+        <form id="create-function-form">
+          <div class="create-form-grid">
+            <div class="form-group">
+              <label for="fn-name-input" class="form-label">Function Name</label>
+              <div class="form-input-wrapper">
+                <input type="text" id="fn-name-input" class="input" placeholder="my-function" autocomplete="off"
+                  required />
+              </div>
+              <div class="form-error-text" id="fn-name-error"></div>
+            </div>
+
+            <div class="form-group">
+              <label for="fn-runtime-select" class="form-label">Runtime Version</label>
+              <select id="fn-runtime-select" class="select">
+                <option value="python">Python 3.11</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block" id="btn-create-function">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v10m0 0l-4-4m4 4l4-4M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"></path>
+            </svg>
+            <span>İşlem Oluştur</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Functions List Card -->
+      <section class="card functions-card">
+        <div class="section-header">
+          <div class="functions-header-left">
+            <h2 class="card-title">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+              Fonksiyonlar
+            </h2>
+            <span class="badge badge-passive" id="functions-count-badge">0 fonksiyon</span>
+          </div>
+          <div class="search-input-wrapper">
+            <svg class="search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+              stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="fn-search-input" class="input input-search" placeholder="Fonksiyon ara..."
+              autocomplete="off" />
+          </div>
+        </div>
+        <div id="functions-container" class="functions-list-scroll"></div>
+      </section>
+    </div>
+
+    <!-- Workspace Detail Panel Section (Opens large below when a function is selected) -->
+    <section class="workspace-section card hidden" id="workspace-section">
+      <!-- Dynamically populated by FunctionsManager when a function is selected -->
+    </section>
+  </main>
+
+  <!-- Monaco Editor CDN Loader -->
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
+
+  <!-- Application Modules -->
+  <script type="module" src="./js/app.js?v=2.5"></script>
+</body>
+
+</html>
