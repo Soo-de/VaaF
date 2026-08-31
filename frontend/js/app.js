@@ -2,16 +2,18 @@
  * Main application bootstrap and event bindings for FaaS Platform.
  */
 
-import { ThemeManager } from './theme.js?v=2.5';
-import { FunctionsManager } from './functions.js?v=2.5';
-import { initMonaco } from './editor.js?v=2.5';
-import { getHealth, DEFAULT_TEMPLATE_CODE, deployFunctionStream } from './api.js?v=2.5';
-import { Toast, validateFunctionName } from './utils.js?v=2.5';
+import { ThemeManager } from './theme.js?v=3.0';
+import { FunctionsManager } from './functions.js?v=3.0';
+import { initMonaco } from './editor.js?v=3.0';
+import { getHealth, DEFAULT_TEMPLATE_CODE, deployFunctionStream, createDraftFunction } from './api.js?v=3.0';
+import { Toast, validateFunctionName } from './utils.js?v=3.0';
+
 
 class App {
   constructor() {
     this.pollingInterval = null;
   }
+
 
   async init() {
     // 1. Initialize theme
@@ -103,63 +105,27 @@ class App {
         return;
       }
 
-      // Check if function already exists in local list
-      const existing = FunctionsManager.functionsData.find(f => f.name.toLowerCase() === functionName.toLowerCase());
-      if (existing) {
-        Toast.warning(`'${functionName}' isimli bir fonksiyon zaten mevcut!`);
-        return;
-      }
-
-      // Prepare UI for creation
-      const origBtnHtml = submitBtn.innerHTML;
-      submitBtn.disabled = true;
-      submitBtn.classList.add('loading');
-      submitBtn.innerHTML = `<span class="spinner"></span> <span>İşlem Oluşturuluyor...</span>`;
-
-      // Optimistically push to list in Deploying state
-      FunctionsManager.functionsData.unshift({
-        name: functionName,
-        url: `http://${functionName}.tenant-functions.svc.cluster.local`,
-        ready: false,
-        deploying: true,
-        created_at: new Date().toISOString(),
-        runtime: runtimeSelect?.value || 'python',
-        namespace: 'tenant-functions'
-      });
-      FunctionsManager.renderList();
-
       try {
-        Toast.info(`'${functionName}' deploy ediliyor...`);
+        await createDraftFunction({
+          name: functionName,
+          runtime: runtimeSelect?.value || 'python'
+        });
 
-        await deployFunctionStream(
-          functionName,
-          DEFAULT_TEMPLATE_CODE,
-          false,
-          {},
-          () => {}
-        );
-
-        Toast.success(`'${functionName}' başarıyla oluşturuldu ve hazır!`);
+        Toast.success(`'${functionName}' oluşturuldu. Kodunuzu düzenleyip 'Deploy' butonu ile yayına alabilirsiniz.`);
         nameInput.value = '';
         nameInput.classList.remove('input-valid');
         if (validationHint) validationHint.textContent = '';
 
-        // Reload data and automatically select the new function
+        // Reload data from store and select the new function
         await FunctionsManager.loadFunctions(true);
-        setTimeout(() => {
-          FunctionsManager.selectFunction(functionName);
-        }, 100);
-
+        FunctionsManager.selectFunction(functionName);
       } catch (err) {
-        Toast.error(`Fonksiyon oluşturulamadı: ${err.message}`);
-        await FunctionsManager.loadFunctions(true);
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.classList.remove('loading');
-        submitBtn.innerHTML = origBtnHtml;
+        Toast.warning(err.message);
       }
     });
   }
+
+
 
   startPolling() {
     if (this.pollingInterval) clearInterval(this.pollingInterval);

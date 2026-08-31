@@ -236,3 +236,28 @@ export function validateFunctionName(name) {
   }
   return { isValid: true, error: null };
 }
+
+/**
+ * Validates environment variable key.
+ * Regex: /^[A-Za-z_][A-Za-z0-9_]*$/
+ * @param {string} key
+ * @returns {{isValid: boolean, error: string|null}}
+ */
+export function validateEnvKey(key) {
+  if (!key || typeof key !== 'string') {
+    return { isValid: false, error: 'Ortam değişkeni adı boş olamaz.' };
+  }
+  const trimmed = key.trim();
+  if (!trimmed) {
+    return { isValid: false, error: 'Ortam değişkeni adı boş olamaz.' };
+  }
+  const regex = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  if (!regex.test(trimmed)) {
+    return {
+      isValid: false,
+      error: `Geçersiz ortam değişkeni adı: '${trimmed}'. Yalnızca harf, rakam ve alt çizgi (_) içerebilir, rakamla başlayamaz.`
+    };
+  }
+  return { isValid: true, error: null };
+}
+

@@ -1,0 +1,109 @@
+# ============================================================
+# ── ClusterIssuer: Let's Encrypt STAGING ──────────────────────────────────────
+# Use this one first. Staging certs aren't trusted by browsers (you'll see a
+# warning), but it proves the whole HTTP-01 flow works without burning
+# Let's Encrypt's production rate limit (5 failures/hour, 50 certs/week/domain)
+# while you're still debugging DNS/ingress/firewall issues.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: REPLACE_ME_LETSENCRYPT_EMAIL
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+
+---
+# ── ClusterIssuer: Let's Encrypt PRODUCTION ───────────────────────────────────
+# Switch faas-platform-ingress's cert-manager.io/cluster-issuer annotation
+# (below) from letsencrypt-staging to letsencrypt-prod once you've confirmed
+# `kubectl describe certificate faas-platform-tls -n faas-platform` shows
+# Ready=True against staging.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: REPLACE_ME_LETSENCRYPT_EMAIL  # ← same address as above
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+
+---
+# ── Ingress: FaaS Platform UI/API (TLS-terminated) ────────────────────────────
+# cert-manager's ingress-shim watches for the cluster-issuer annotation and
+# auto-creates a matching Certificate resource — no separate Certificate
+# object needed for the common case.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: faas-platform-ingress
+  namespace: faas-platform
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging  # ← flip to letsencrypt-prod once verified
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - 134.122.61.206.sslip.io
+      secretName: faas-platform-tls
+  rules:
+    - host: 134.122.61.206.sslip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: faas-platform-service
+                port:
+                  number: 8000
+
+---
+# ── Ingress: Knative function passthrough (unchanged, plain HTTP) ────────────
+# Lives in kourier-system because a standard Ingress can only point at a
+# Service in its own namespace, and Kourier's Service is there. This is what
+# lets ingress-nginx become the droplet's single host-port-80/443 entrypoint
+# (see deploy.yml) without breaking existing function URLs — every deployed
+# function is still reached exactly as before, just proxied through one more
+# hop. TLS for *functions* (as opposed to the platform UI/API) is out of
+# scope here: it needs a wildcard certificate, which needs DNS-01, which
+# sslip.io can't do (there's no DNS provider to hand cert-manager a token for).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: knative-passthrough-ingress
+  namespace: kourier-system
+  annotations:
+    # ingress-nginx force-redirects HTTP → HTTPS by default even for a host
+    # that has no tls: block on ANY Ingress (it uses its own fake default
+    # cert for the 443 side of that redirect) — without this, every plain
+    # http://<fn>....sslip.io link 308s to an https:// host nothing serves a
+    # real cert for, the request never reaches Kourier, and no pod ever
+    # cold-starts. Functions are plain HTTP by design (see file header).
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "*.tenant-functions.134.122.61.206.sslip.io"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kourier
+                port:
+                  number: 80

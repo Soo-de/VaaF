@@ -2,7 +2,8 @@
  * Monaco Editor loader and lifecycle manager.
  */
 
-import { ThemeManager } from './theme.js?v=2.5';
+import { ThemeManager } from './theme.js?v=3.0';
+
 
 let isMonacoReady = false;
 let monacoReadyPromise = null;

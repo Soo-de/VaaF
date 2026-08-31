@@ -11,10 +11,11 @@ import {
   deleteFunction,
   getFunctionLogs,
   proxyRequest
-} from './api.js?v=2.5';
-import { createEditor, getEditor, disposeEditor } from './editor.js?v=2.5';
-import { DeployManager } from './deploy.js?v=2.5';
-import { Toast, Modal, copyToClipboard, escapeHtml, formatDate } from './utils.js?v=2.5';
+} from './api.js?v=3.0';
+import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.0';
+import { DeployManager } from './deploy.js?v=3.0';
+import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey } from './utils.js?v=3.0';
+
 
 export const FunctionsManager = {
   listContainer: null,
@@ -185,11 +186,12 @@ export const FunctionsManager = {
     if (fn.deploying) {
       return `<span class="badge badge-deploying"><span class="pulse-dot"></span> Deploying</span>`;
     }
-    if (fn.ready) {
-      return `<span class="badge badge-ready"><span class="status-dot dot-green"></span> Ready</span>`;
+    if (fn.ready || fn.deployed) {
+      return `<span class="badge badge-ready"><span class="status-dot dot-green"></span> Deployed</span>`;
     }
-    return `<span class="badge badge-not-ready"><span class="status-dot dot-red"></span> Not Ready</span>`;
+    return `<span class="badge badge-not-ready"><span class="status-dot dot-red"></span> Not Deployed</span>`;
   },
+
 
   getRuntimeIcon(runtime = 'python') {
     const r = (runtime || 'python').toLowerCase();
@@ -622,13 +624,40 @@ export const FunctionsManager = {
       const editorInstance = getEditor(`editor-main-${fnName}`);
       const latestCode = editorInstance ? editorInstance.getValue() : codeContent;
 
+      // Directly validate and collect from current DOM inputs in Environment pane
+      const envRows = ws.querySelectorAll(`#env-rows-${fnName} .env-row`);
       const envObj = {};
-      const currentEnv = this.envVarsState.get(fnName);
-      if (currentEnv) {
-        for (const [k, v] of currentEnv.entries()) {
-          if (k.trim()) envObj[k.trim()] = v;
+      let hasEnvError = false;
+
+      envRows.forEach(row => {
+        const keyInput = row.querySelector('.env-key-input');
+        const valInput = row.querySelector('.env-val-input');
+        const errSpan = row.querySelector('.env-key-error');
+        const rawKey = keyInput ? keyInput.value.trim() : '';
+        const rawVal = valInput ? valInput.value : '';
+
+        if (rawKey) {
+          const { isValid, error } = validateEnvKey(rawKey);
+          if (!isValid) {
+            hasEnvError = true;
+            keyInput?.classList.add('input-invalid');
+            if (errSpan) errSpan.textContent = error || 'Geçersiz değişken adı';
+            Toast.error(error);
+          } else {
+            keyInput?.classList.remove('input-invalid');
+            if (errSpan) errSpan.textContent = '';
+            envObj[rawKey] = rawVal;
+          }
         }
+      });
+
+      if (hasEnvError) {
+        return; // Abort deploy if any key is invalid!
       }
+
+      // Determine isUpdate: true only if already deployed before (ready/deployed)
+      const currentFn = this.functionsData.find(f => f.name === fnName);
+      const isUpdate = Boolean(currentFn && (currentFn.ready || currentFn.deployed || (currentFn.revisions && currentFn.revisions.length > 0)));
 
       // Format console container wrapper for DeployManager
       const consoleWrapper = ws.querySelector('.ide-output-container');
@@ -636,11 +665,15 @@ export const FunctionsManager = {
       await DeployManager.runDeploy({
         functionName: fnName,
         code: latestCode,
-        isUpdate: true,
+        isUpdate: isUpdate,
         envVars: envObj,
         consoleElement: consoleWrapper,
         deployBtn,
         onComplete: () => {
+          if (currentFn) {
+            currentFn.ready = true;
+            currentFn.deployed = true;
+          }
           this.loadFunctions(true);
         }
       });
@@ -661,11 +694,19 @@ export const FunctionsManager = {
     let rows = '';
     let idx = 0;
     for (const [k, v] of envMap.entries()) {
+      const { isValid, error } = validateEnvKey(k);
+      const invalidClass = (k && !isValid) ? ' input-invalid' : '';
+      const errorText = (k && !isValid) ? (error || '') : '';
       rows += `
-        <div class="env-row" data-index="${idx}">
-          <input type="text" class="input env-key-input" placeholder="ANAHTAR" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
-          <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
-          <button class="icon-btn delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil">
+        <div class="env-row" data-index="${idx}" style="align-items: flex-start; margin-bottom: 10px;">
+          <div class="env-key-col" style="flex: 1; display: flex; flex-direction: column;">
+            <input type="text" class="input env-key-input${invalidClass}" placeholder="ANAHTAR (örn: API_KEY)" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
+            <span class="env-key-error text-danger" style="font-size: 11px; color: #f87171; min-height: 14px; margin-top: 3px;">${escapeHtml(errorText)}</span>
+          </div>
+          <div class="env-val-col" style="flex: 1; display: flex; flex-direction: column;">
+            <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
+          </div>
+          <button class="icon-btn delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil" style="margin-top: 6px;">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
@@ -675,6 +716,25 @@ export const FunctionsManager = {
     container.innerHTML = rows;
 
     container.querySelectorAll('.env-key-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const val = input.value.trim();
+        const row = input.closest('.env-row');
+        const errSpan = row?.querySelector('.env-key-error');
+        if (val) {
+          const { isValid, error } = validateEnvKey(val);
+          if (!isValid) {
+            input.classList.add('input-invalid');
+            if (errSpan) errSpan.textContent = error || 'Geçersiz değişken adı';
+          } else {
+            input.classList.remove('input-invalid');
+            if (errSpan) errSpan.textContent = '';
+          }
+        } else {
+          input.classList.remove('input-invalid');
+          if (errSpan) errSpan.textContent = '';
+        }
+      });
+
       input.addEventListener('change', () => {
         const oldKey = input.getAttribute('data-oldkey');
         const newKey = input.value.trim();
@@ -709,6 +769,8 @@ export const FunctionsManager = {
       });
     });
   },
+
+
 
   async setupTestTab(fn) {
     const fnName = fn.name;
