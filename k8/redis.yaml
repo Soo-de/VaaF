@@ -1,0 +1,88 @@
+# ============================================================
+#  VaaF/k8s/redis.yaml
+#  Redis — shared deploy-job status store for VaaF orchestrator
+# ============================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-redis
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: "1Gi"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vaaf-redis
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # avoid two pods ever attaching the same RWO volume
+  selector:
+    matchLabels:
+      app: vaaf-redis
+  template:
+    metadata:
+      labels:
+        app: vaaf-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          args: ["--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "192Mi"
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaaf-redis
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: vaaf-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379

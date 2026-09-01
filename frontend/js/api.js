@@ -3,8 +3,9 @@
  * All communication with the backend passes through this module.
  */
 
-export const API_BASE = "";
-export const USE_MOCK = true;
+// Auto-detect local development on port 9000 -> routes to backend on port 8000
+export const API_BASE = window.location.port === "9000" ? "http://localhost:8000" : "";
+export const USE_MOCK = false;
 export const USER_ID = localStorage.getItem("faas-user-id") || "anonymous";
 
 export const DEFAULT_TEMPLATE_CODE = `def handler(event, context):
@@ -33,6 +34,31 @@ export const DEFAULT_TEMPLATE_CODE = `def handler(event, context):
 
 // In-memory mock state store (persisted in sessionStorage for interactive session fidelity)
 const MOCK_STORAGE_KEY = 'faas-mock-store';
+const DRAFT_STORAGE_KEY = 'faas_drafts';
+
+export function getLocalDrafts() {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalDraft(draft) {
+  try {
+    const drafts = getLocalDrafts().filter(d => d.name !== draft.name);
+    drafts.unshift(draft);
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {}
+}
+
+export function removeLocalDraft(name) {
+  try {
+    const drafts = getLocalDrafts().filter(d => d.name !== name);
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {}
+}
 
 function getMockStore() {
   const cached = sessionStorage.getItem(MOCK_STORAGE_KEY);
@@ -48,18 +74,19 @@ function getMockStore() {
     functions: [
       {
         name: "ornek-fonksiyon",
-        url: "http://ornek-fonksiyon.tenant-functions.svc.cluster.local",
+        url: "http://ornek-fonksiyon.vaaf-functions.svc.cluster.local",
         ready: true,
+        deployed: true,
         created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
         runtime: "python",
-        namespace: "tenant-functions",
+        namespace: "vaaf-functions",
         code: `def handler(event, context):
     name = event.get('body', {}).get('name', 'Dünya')
     return {
         'statusCode': 200,
         'body': {'message': f'Merhaba {name}!'}
     }`,
-        env: {
+        environment: {
           "APP_ENV": "production",
           "LOG_LEVEL": "INFO"
         },
@@ -70,11 +97,12 @@ function getMockStore() {
       },
       {
         name: "hesaplama",
-        url: "http://hesaplama.tenant-functions.svc.cluster.local",
+        url: "http://hesaplama.vaaf-functions.svc.cluster.local",
         ready: false,
+        deployed: false,
         created_at: new Date(Date.now() - 3600000 * 4).toISOString(),
         runtime: "python",
-        namespace: "tenant-functions",
+        namespace: "vaaf-functions",
         code: `def handler(event, context):
     body = event.get('body', {})
     a = body.get('a', 0)
@@ -83,10 +111,8 @@ function getMockStore() {
         'statusCode': 200,
         'body': {'result': a + b}
     }`,
-        env: {},
-        revisions: [
-          { name: "hesaplama-00001", created_at: new Date(Date.now() - 3600000 * 4).toISOString(), is_active: true, has_code: true, code: `def handler(event, context):\n    return {'statusCode': 200, 'body': {'result': 0}}` }
-        ]
+        environment: {},
+        revisions: []
       }
     ]
   };
@@ -115,23 +141,62 @@ export async function apiFetch(path, options = {}) {
 }
 
 /**
+ * Create a new draft function (not yet deployed).
+ * Persisted in localStorage ('faas_drafts') so it is preserved in both dev and production.
+ * @param {Object} params
+ * @param {string} params.name
+ * @param {string} [params.runtime="python"]
+ * @returns {Promise<Object>}
+ */
+export async function createDraftFunction({ name, runtime = "python" }) {
+  const draft = {
+    name,
+    url: `http://${name}.vaaf-functions.svc.cluster.local`,
+    ready: false,
+    deployed: false,
+    created_at: new Date().toISOString(),
+    runtime,
+    namespace: "vaaf-functions",
+    code: DEFAULT_TEMPLATE_CODE,
+    environment: {},
+    revisions: []
+  };
+
+  saveLocalDraft(draft);
+
+  if (USE_MOCK) {
+    const store = getMockStore();
+    const existing = store.functions.find(f => f.name.toLowerCase() === name.toLowerCase());
+    if (existing) {
+      throw new Error(`'${name}' isimli bir fonksiyon zaten mevcut!`);
+    }
+    store.functions.unshift(draft);
+    saveMockStore(store);
+  }
+
+  return draft;
+}
+
+/**
  * Check backend health status.
- * @returns {Promise<{ status: string }>}
+ * @returns {Promise<{ status: string, timestamp?: string }>}
  */
 export async function getHealth() {
   if (USE_MOCK) {
-    return { status: "ok" };
+    return { status: "healthy", timestamp: new Date().toISOString() };
   }
-  const res = await apiFetch("/health");
+  const res = await apiFetch("/health/status");
   if (!res.ok) throw new Error(`Health check failed with status: ${res.status}`);
   return res.json();
 }
 
 /**
- * Retrieve list of all deployed functions.
+ * Retrieve list of all deployed functions, merging any active local drafts.
  * @returns {Promise<{ functions: Array<Object>, namespace: string }>}
  */
 export async function getFunctions() {
+  const drafts = getLocalDrafts();
+
   if (USE_MOCK) {
     const store = getMockStore();
     return {
@@ -139,25 +204,47 @@ export async function getFunctions() {
         name: f.name,
         url: f.url,
         ready: f.ready,
+        deployed: f.deployed ?? f.ready,
         created_at: f.created_at,
         runtime: f.runtime,
         namespace: f.namespace
       })),
-      namespace: "tenant-functions"
+      namespace: "vaaf-functions"
     };
   }
 
   const res = await apiFetch("/functions");
   if (!res.ok) throw new Error(`Failed to fetch functions: ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  const liveFunctions = data.functions || [];
+
+  // Merge un-deployed local drafts at the top
+  const unDeployedDrafts = drafts.filter(d => !liveFunctions.some(lf => lf.name === d.name));
+
+  return {
+    functions: [...unDeployedDrafts, ...liveFunctions],
+    namespace: data.namespace || "vaaf-functions"
+  };
 }
 
 /**
  * Retrieve source code for a specific function.
+ * Checks local drafts first before requesting backend.
  * @param {string} name
- * @returns {Promise<{ name: string, language: string, code: string }>}
+ * @returns {Promise<{ name: string, language: string, code: string, environment: Object }>}
  */
 export async function getFunctionCode(name) {
+  // Check local draft first
+  const draft = getLocalDrafts().find(d => d.name === name);
+  if (draft) {
+    return {
+      name,
+      language: "python",
+      code: draft.code || DEFAULT_TEMPLATE_CODE,
+      environment: draft.environment || draft.env || {}
+    };
+  }
+
   if (USE_MOCK) {
     const store = getMockStore();
     const fn = store.functions.find(f => f.name === name);
@@ -165,7 +252,7 @@ export async function getFunctionCode(name) {
       name,
       language: "python",
       code: fn?.code || DEFAULT_TEMPLATE_CODE,
-      env: fn?.env || {}
+      environment: fn?.environment || fn?.env || {}
     };
   }
 
@@ -173,6 +260,7 @@ export async function getFunctionCode(name) {
   if (!res.ok) throw new Error(`Failed to fetch code for ${name}: ${res.status}`);
   return res.json();
 }
+
 
 /**
  * Retrieve revisions list for a specific function.
@@ -265,6 +353,8 @@ export async function rollbackRevision(name, revisionName) {
  * @returns {Promise<{ message: string, function_name: string }>}
  */
 export async function deleteFunction(name) {
+  removeLocalDraft(name);
+
   if (USE_MOCK) {
     const store = getMockStore();
     store.functions = store.functions.filter(f => f.name !== name);
@@ -281,6 +371,7 @@ export async function deleteFunction(name) {
   if (!res.ok) throw new Error(`Failed to delete function ${name}: ${res.status}`);
   return res.json();
 }
+
 
 /**
  * Retrieve execution logs for a function.
@@ -361,9 +452,9 @@ export async function proxyRequest({ url, method = "POST", headers = {}, body = 
   const data = await res.json();
 
   return {
-    statusCode: res.status,
-    durationMs,
-    body: data
+    statusCode: (data && data.status) ? data.status : res.status,
+    durationMs: (data && data.duration_ms) ? data.duration_ms : durationMs,
+    body: (data && data.body !== undefined) ? data.body : data
   };
 }
 
@@ -386,13 +477,13 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
         { type: 'log', data: '   → Image: faas-python-runtime:3.11-slim' },
         { type: 'step', data: '⏳ Step 3/3 — Fonksiyon podları ve route başlatılıyor...' },
         { type: 'log', data: '   → Pod hazır, ingress yönlendirildi' },
-        { type: 'url', data: `http://${name}.tenant-functions.svc.cluster.local` },
+        { type: 'url', data: `http://${name}.vaaf-functions.svc.cluster.local` },
         {
           type: 'done',
           data: JSON.stringify({
             status: 'success',
             function_name: name,
-            url: `http://${name}.tenant-functions.svc.cluster.local`
+            url: `http://${name}.vaaf-functions.svc.cluster.local`
           })
         }
       ];
@@ -413,7 +504,8 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
           if (existingFn) {
             existingFn.code = code;
             existingFn.ready = true;
-            existingFn.env = { ...envVars };
+            existingFn.deployed = true;
+            existingFn.environment = { ...envVars };
             if (!existingFn.revisions) existingFn.revisions = [];
             existingFn.revisions.forEach(r => (r.is_active = false));
             existingFn.revisions.unshift({
@@ -426,13 +518,14 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
           } else {
             const newFn = {
               name,
-              url: `http://${name}.tenant-functions.svc.cluster.local`,
+              url: `http://${name}.vaaf-functions.svc.cluster.local`,
               ready: true,
+              deployed: true,
               created_at: new Date().toISOString(),
               runtime: "python",
-              namespace: "tenant-functions",
+              namespace: "vaaf-functions",
               code,
-              env: { ...envVars },
+              environment: { ...envVars },
               revisions: [
                 {
                   name: revId,
@@ -447,10 +540,11 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
           }
           saveMockStore(store);
 
+
           resolve({
             status: 'success',
             function_name: name,
-            url: `http://${name}.tenant-functions.svc.cluster.local`
+            url: `http://${name}.vaaf-functions.svc.cluster.local`
           });
         }
       }, 450);
@@ -504,9 +598,11 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
         } catch {
           finalResult = { status: 'done', data };
         }
+        removeLocalDraft(name);
       }
     }
   }
 
   return finalResult || { status: 'success', function_name: name };
 }
+
