@@ -1,6 +1,6 @@
 # ============================================================
-#  Vakifbank-FaaS-Project/k8s/resource-quota.yaml
-#  LimitRange for tenant-functions
+#  VaaF/k8s/resource-quota.yaml
+#  LimitRange for vaaf-functions
 #
 #  The ResourceQuota in namespace.yaml caps the *namespace total*
 #  (how much CPU/memory all tenant functions may consume together).
@@ -32,8 +32,8 @@
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: tenant-functions-limits
-  namespace: tenant-functions
+  name: vaaf-functions-limits
+  namespace: vaaf-functions
 spec:
   limits:
     - type: Container

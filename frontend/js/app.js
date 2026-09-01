@@ -48,10 +48,14 @@ class App {
 
     try {
       const res = await getHealth();
-      if (res && res.status === 'ok') {
+      if (res && (res.status === 'ok' || res.status === 'healthy')) {
         if (healthDot) healthDot.className = 'status-dot dot-green';
         if (healthText) healthText.textContent = 'All Systems Operational';
-        healthBadge?.setAttribute('title', 'Sistem düzgün çalışıyor');
+        healthBadge?.setAttribute('title', res.timestamp ? `Sistem çalışıyor (${new Date(res.timestamp).toLocaleTimeString('tr-TR')})` : 'Sistem düzgün çalışıyor');
+      } else if (res && res.status === 'degraded') {
+        if (healthDot) healthDot.className = 'status-dot dot-yellow';
+        if (healthText) healthText.textContent = 'System Degraded';
+        healthBadge?.setAttribute('title', 'Backend çalışıyor, K8s/Redis bağımlılığı bekleniyor');
       } else {
         throw new Error('Unhealthy status');
       }
@@ -111,7 +115,6 @@ class App {
           runtime: runtimeSelect?.value || 'python'
         });
 
-        Toast.success(`'${functionName}' oluşturuldu. Kodunuzu düzenleyip 'Deploy' butonu ile yayına alabilirsiniz.`);
         nameInput.value = '';
         nameInput.classList.remove('input-valid');
         if (validationHint) validationHint.textContent = '';
@@ -120,7 +123,7 @@ class App {
         await FunctionsManager.loadFunctions(true);
         FunctionsManager.selectFunction(functionName);
       } catch (err) {
-        Toast.warning(err.message);
+        Toast.error(err.message || 'Fonksiyon oluşturulamadı.');
       }
     });
   }

@@ -535,8 +535,8 @@ export const FunctionsManager = {
       const codeRes = await getFunctionCode(fnName);
       if (codeRes && codeRes.code) {
         codeContent = codeRes.code;
-        if (codeRes.env) {
-          Object.entries(codeRes.env).forEach(([k, v]) => envMap.set(k, v));
+        if (codeRes.environment) {
+          Object.entries(codeRes.environment).forEach(([k, v]) => envMap.set(k, v));
         }
       }
     } catch {

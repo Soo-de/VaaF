@@ -41,15 +41,15 @@ spec:
             ingressClassName: nginx
 
 ---
-# ── Ingress: FaaS Platform UI/API (TLS-terminated) ────────────────────────────
+# ── Ingress: VaaF Platform UI/API (TLS-terminated) ────────────────────────────
 # cert-manager's ingress-shim watches for the cluster-issuer annotation and
 # auto-creates a matching Certificate resource — no separate Certificate
 # object needed for the common case.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: faas-platform-ingress
-  namespace: faas-platform
+  name: vaaf-platform-ingress
+  namespace: vaaf-platform
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-staging  # ← flip to letsencrypt-prod once verified
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
@@ -58,7 +58,7 @@ spec:
   tls:
     - hosts:
         - 134.122.61.206.sslip.io
-      secretName: faas-platform-tls
+      secretName: vaaf-platform-tls
   rules:
     - host: 134.122.61.206.sslip.io
       http:
@@ -67,7 +67,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: faas-platform-service
+                name: vaaf-platform-service
                 port:
                   number: 8000
 
@@ -97,7 +97,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: "*.tenant-functions.134.122.61.206.sslip.io"
+    - host: "*.vaaf-functions.134.122.61.206.sslip.io"
       http:
         paths:
           - path: /

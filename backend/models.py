@@ -3,6 +3,7 @@ models.py — Pydantic request/response modals
 """
 import re
 from pydantic import BaseModel, Field, field_validator
+from config import SUPPORTED_LANGUAGES
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,49}$")
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -20,6 +21,14 @@ class DeployRequest(BaseModel):
     def validate_name(cls, v: str) -> str:
         if not _NAME_RE.match(v):
             raise ValueError("Fonksiyon adı küçük harfle başlamalı; sadece küçük harf, rakam ve tire içermelidir.")
+        return v
+
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, v: str) -> str:
+        if v not in SUPPORTED_LANGUAGES:
+            supported = ", ".join(SUPPORTED_LANGUAGES)
+            raise ValueError(f"Desteklenmeyen dil: '{v}'. Desteklenen diller: {supported}")
         return v
 
     @field_validator("environment")

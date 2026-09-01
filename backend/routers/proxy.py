@@ -6,19 +6,16 @@ Restricts outgoing targets to ALLOWED_DOMAINS for SSRF protection.
 import time
 import httpx
 from fastapi import APIRouter, HTTPException
+from config import ALLOWED_PROXY_DOMAINS
 from models import ProxyRequest
 
 router = APIRouter(tags=["proxy"])
 
 
-# Only accept requests to these domains (SSRF Protection)
-ALLOWED_DOMAINS = [".sslip.io", ".svc.cluster.local", "localhost", "127.0.0.1"]
-
-
 @router.post("/proxy", summary="Test çağrıları için proxy")
 async def proxy_request(req: ProxyRequest):
     # SSRF Protection
-    if not any(domain in req.url for domain in ALLOWED_DOMAINS):
+    if not any(domain in req.url for domain in ALLOWED_PROXY_DOMAINS):
         raise HTTPException(
             status_code=400,
             detail="Güvenlik Kuralı: Proxy üzerinden yalnızca platform fonksiyon URL'lerine istek atılabilir."

@@ -3,8 +3,9 @@
  * All communication with the backend passes through this module.
  */
 
-export const API_BASE = "";
-export const USE_MOCK = true;
+// Auto-detect local development on port 9000 -> routes to backend on port 8000
+export const API_BASE = window.location.port === "9000" ? "http://localhost:8000" : "";
+export const USE_MOCK = false;
 export const USER_ID = localStorage.getItem("faas-user-id") || "anonymous";
 
 export const DEFAULT_TEMPLATE_CODE = `def handler(event, context):
@@ -73,19 +74,19 @@ function getMockStore() {
     functions: [
       {
         name: "ornek-fonksiyon",
-        url: "http://ornek-fonksiyon.tenant-functions.svc.cluster.local",
+        url: "http://ornek-fonksiyon.vaaf-functions.svc.cluster.local",
         ready: true,
         deployed: true,
         created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
         runtime: "python",
-        namespace: "tenant-functions",
+        namespace: "vaaf-functions",
         code: `def handler(event, context):
     name = event.get('body', {}).get('name', 'Dünya')
     return {
         'statusCode': 200,
         'body': {'message': f'Merhaba {name}!'}
     }`,
-        env: {
+        environment: {
           "APP_ENV": "production",
           "LOG_LEVEL": "INFO"
         },
@@ -96,12 +97,12 @@ function getMockStore() {
       },
       {
         name: "hesaplama",
-        url: "http://hesaplama.tenant-functions.svc.cluster.local",
+        url: "http://hesaplama.vaaf-functions.svc.cluster.local",
         ready: false,
         deployed: false,
         created_at: new Date(Date.now() - 3600000 * 4).toISOString(),
         runtime: "python",
-        namespace: "tenant-functions",
+        namespace: "vaaf-functions",
         code: `def handler(event, context):
     body = event.get('body', {})
     a = body.get('a', 0)
@@ -110,7 +111,7 @@ function getMockStore() {
         'statusCode': 200,
         'body': {'result': a + b}
     }`,
-        env: {},
+        environment: {},
         revisions: []
       }
     ]
@@ -150,14 +151,14 @@ export async function apiFetch(path, options = {}) {
 export async function createDraftFunction({ name, runtime = "python" }) {
   const draft = {
     name,
-    url: `http://${name}.tenant-functions.svc.cluster.local`,
+    url: `http://${name}.vaaf-functions.svc.cluster.local`,
     ready: false,
     deployed: false,
     created_at: new Date().toISOString(),
     runtime,
-    namespace: "tenant-functions",
+    namespace: "vaaf-functions",
     code: DEFAULT_TEMPLATE_CODE,
-    env: {},
+    environment: {},
     revisions: []
   };
 
@@ -178,13 +179,13 @@ export async function createDraftFunction({ name, runtime = "python" }) {
 
 /**
  * Check backend health status.
- * @returns {Promise<{ status: string }>}
+ * @returns {Promise<{ status: string, timestamp?: string }>}
  */
 export async function getHealth() {
   if (USE_MOCK) {
-    return { status: "ok" };
+    return { status: "healthy", timestamp: new Date().toISOString() };
   }
-  const res = await apiFetch("/health");
+  const res = await apiFetch("/health/status");
   if (!res.ok) throw new Error(`Health check failed with status: ${res.status}`);
   return res.json();
 }
@@ -208,7 +209,7 @@ export async function getFunctions() {
         runtime: f.runtime,
         namespace: f.namespace
       })),
-      namespace: "tenant-functions"
+      namespace: "vaaf-functions"
     };
   }
 
@@ -222,7 +223,7 @@ export async function getFunctions() {
 
   return {
     functions: [...unDeployedDrafts, ...liveFunctions],
-    namespace: data.namespace || "tenant-functions"
+    namespace: data.namespace || "vaaf-functions"
   };
 }
 
@@ -230,7 +231,7 @@ export async function getFunctions() {
  * Retrieve source code for a specific function.
  * Checks local drafts first before requesting backend.
  * @param {string} name
- * @returns {Promise<{ name: string, language: string, code: string, env: Object }>}
+ * @returns {Promise<{ name: string, language: string, code: string, environment: Object }>}
  */
 export async function getFunctionCode(name) {
   // Check local draft first
@@ -240,7 +241,7 @@ export async function getFunctionCode(name) {
       name,
       language: "python",
       code: draft.code || DEFAULT_TEMPLATE_CODE,
-      env: draft.env || {}
+      environment: draft.environment || draft.env || {}
     };
   }
 
@@ -251,7 +252,7 @@ export async function getFunctionCode(name) {
       name,
       language: "python",
       code: fn?.code || DEFAULT_TEMPLATE_CODE,
-      env: fn?.env || {}
+      environment: fn?.environment || fn?.env || {}
     };
   }
 
@@ -451,9 +452,9 @@ export async function proxyRequest({ url, method = "POST", headers = {}, body = 
   const data = await res.json();
 
   return {
-    statusCode: res.status,
-    durationMs,
-    body: data
+    statusCode: (data && data.status) ? data.status : res.status,
+    durationMs: (data && data.duration_ms) ? data.duration_ms : durationMs,
+    body: (data && data.body !== undefined) ? data.body : data
   };
 }
 
@@ -476,13 +477,13 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
         { type: 'log', data: '   → Image: faas-python-runtime:3.11-slim' },
         { type: 'step', data: '⏳ Step 3/3 — Fonksiyon podları ve route başlatılıyor...' },
         { type: 'log', data: '   → Pod hazır, ingress yönlendirildi' },
-        { type: 'url', data: `http://${name}.tenant-functions.svc.cluster.local` },
+        { type: 'url', data: `http://${name}.vaaf-functions.svc.cluster.local` },
         {
           type: 'done',
           data: JSON.stringify({
             status: 'success',
             function_name: name,
-            url: `http://${name}.tenant-functions.svc.cluster.local`
+            url: `http://${name}.vaaf-functions.svc.cluster.local`
           })
         }
       ];
@@ -504,7 +505,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
             existingFn.code = code;
             existingFn.ready = true;
             existingFn.deployed = true;
-            existingFn.env = { ...envVars };
+            existingFn.environment = { ...envVars };
             if (!existingFn.revisions) existingFn.revisions = [];
             existingFn.revisions.forEach(r => (r.is_active = false));
             existingFn.revisions.unshift({
@@ -517,14 +518,14 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
           } else {
             const newFn = {
               name,
-              url: `http://${name}.tenant-functions.svc.cluster.local`,
+              url: `http://${name}.vaaf-functions.svc.cluster.local`,
               ready: true,
               deployed: true,
               created_at: new Date().toISOString(),
               runtime: "python",
-              namespace: "tenant-functions",
+              namespace: "vaaf-functions",
               code,
-              env: { ...envVars },
+              environment: { ...envVars },
               revisions: [
                 {
                   name: revId,
@@ -543,7 +544,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
           resolve({
             status: 'success',
             function_name: name,
-            url: `http://${name}.tenant-functions.svc.cluster.local`
+            url: `http://${name}.vaaf-functions.svc.cluster.local`
           });
         }
       }, 450);
