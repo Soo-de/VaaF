@@ -121,6 +121,12 @@ async def run_deploy_pipeline(
                 },
             },
             "spec": {
+                "traffic": [
+                    {
+                        "latestRevision": True,
+                        "percent": 100,
+                    }
+                ],
                 "template": {
                     "metadata": {
                         "annotations": {

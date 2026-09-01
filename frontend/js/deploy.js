@@ -110,9 +110,22 @@ export const DeployManager = {
       Toast.error(`Deploy başarısız: ${err.message}`);
     } finally {
       if (deployBtn) {
-        deployBtn.disabled = false;
         deployBtn.classList.remove('loading');
-        deployBtn.innerHTML = originalBtnHtml;
+        // Visual cooldown (3 seconds) to prevent rapid clicking and Knative superseding errors
+        let cooldown = 3;
+        deployBtn.innerHTML = `<span>✔ Hazır (${cooldown}s)</span>`;
+        deployBtn.disabled = true;
+
+        const interval = setInterval(() => {
+          cooldown--;
+          if (cooldown > 0) {
+            deployBtn.innerHTML = `<span>✔ Hazır (${cooldown}s)</span>`;
+          } else {
+            clearInterval(interval);
+            deployBtn.disabled = false;
+            deployBtn.innerHTML = originalBtnHtml;
+          }
+        }, 1000);
       }
     }
   }
