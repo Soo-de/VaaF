@@ -198,33 +198,45 @@ export async function getFunctions() {
   const drafts = getLocalDrafts();
 
   if (USE_MOCK) {
-    const store = getMockStore();
+    const mockFunctions = getMockStore().functions;
+    const unDeployedDrafts = drafts.filter(
+      d => !mockFunctions.some(mf => mf.name === d.name)
+    );
     return {
-      functions: store.functions.map(f => ({
-        name: f.name,
-        url: f.url,
-        ready: f.ready,
-        deployed: f.deployed ?? f.ready,
-        created_at: f.created_at,
-        runtime: f.runtime,
-        namespace: f.namespace
-      })),
+      functions: [...unDeployedDrafts, ...mockFunctions],
       namespace: "vaaf-functions"
     };
   }
 
-  const res = await apiFetch("/functions");
-  if (!res.ok) throw new Error(`Failed to fetch functions: ${res.status}`);
-  const data = await res.json();
-  const liveFunctions = data.functions || [];
+  try {
+    const res = await apiFetch("/functions");
+    if (!res.ok) {
+      console.warn(`[getFunctions] Backend returned HTTP ${res.status}, displaying local drafts.`);
+      return {
+        functions: drafts,
+        namespace: "vaaf-functions"
+      };
+    }
 
-  // Merge un-deployed local drafts at the top
-  const unDeployedDrafts = drafts.filter(d => !liveFunctions.some(lf => lf.name === d.name));
+    const data = await res.json();
+    const liveFunctions = data.functions || [];
 
-  return {
-    functions: [...unDeployedDrafts, ...liveFunctions],
-    namespace: data.namespace || "vaaf-functions"
-  };
+    // Merge un-deployed local drafts at the top
+    const unDeployedDrafts = drafts.filter(
+      d => !liveFunctions.some(lf => lf.name === d.name)
+    );
+
+    return {
+      functions: [...unDeployedDrafts, ...liveFunctions],
+      namespace: data.namespace || "vaaf-functions"
+    };
+  } catch (err) {
+    console.warn(`[getFunctions] Network/Cluster unavailable (${err.message}), displaying local drafts.`);
+    return {
+      functions: drafts,
+      namespace: "vaaf-functions"
+    };
+  }
 }
 
 /**
