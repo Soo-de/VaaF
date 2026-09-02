@@ -94,6 +94,7 @@ def build_knative_service_manifest(
                     },
                 },
                 "spec": {
+                    "timeoutSeconds": 60,
                     "containers": [
                         {
                             "name": "user-container",

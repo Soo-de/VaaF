@@ -2,8 +2,8 @@
  * Deploy flow manager, handling SSE streaming output and console logging.
  */
 
-import { deployFunctionStream } from './api.js?v=3.0';
-import { Toast, escapeHtml } from './utils.js?v=3.0';
+import { deployFunctionStream } from './api.js?v=3.1';
+import { Toast, escapeHtml } from './utils.js?v=3.1';
 
 
 export const DeployManager = {
@@ -116,21 +116,8 @@ export const DeployManager = {
     } finally {
       if (deployBtn) {
         deployBtn.classList.remove('loading');
-        // Visual cooldown (3 seconds) to prevent rapid clicking and Knative superseding errors
-        let cooldown = 3;
-        deployBtn.innerHTML = `<span>✔ Hazır (${cooldown}s)</span>`;
-        deployBtn.disabled = true;
-
-        const interval = setInterval(() => {
-          cooldown--;
-          if (cooldown > 0) {
-            deployBtn.innerHTML = `<span>✔ Hazır (${cooldown}s)</span>`;
-          } else {
-            clearInterval(interval);
-            deployBtn.disabled = false;
-            deployBtn.innerHTML = originalBtnHtml;
-          }
-        }, 1000);
+        deployBtn.disabled = false;
+        deployBtn.innerHTML = originalBtnHtml;
       }
     }
   }

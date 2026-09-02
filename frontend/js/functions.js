@@ -11,10 +11,10 @@ import {
   deleteFunction,
   getFunctionLogs,
   proxyRequest
-} from './api.js?v=3.0';
-import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.0';
-import { DeployManager } from './deploy.js?v=3.0';
-import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey } from './utils.js?v=3.0';
+} from './api.js?v=3.1';
+import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.1';
+import { DeployManager } from './deploy.js?v=3.1';
+import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey } from './utils.js?v=3.1';
 
 
 export const FunctionsManager = {

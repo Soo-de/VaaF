@@ -35,12 +35,12 @@ metadata:
   namespace: vaaf-functions
 spec:
   hard:
-    pods:                "50"
-    services:            "50"
-    requests.cpu:        "3"
-    requests.memory:     "5Gi"
-    limits.cpu:          "6"
-    limits.memory:       "6Gi"
+    pods:                "100"
+    services:            "100"
+    requests.cpu:        "10"
+    requests.memory:     "16Gi"
+    limits.cpu:          "20"
+    limits.memory:       "32Gi"
 
 ---
 # ── ServiceAccount for FastAPI Orchestrator ───────────────────────────────────

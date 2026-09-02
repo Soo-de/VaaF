@@ -179,7 +179,8 @@ def get_ksvc_ready_url(
 def get_ksvc_failure_reason(
     name: str, namespace: str = TENANT_NAMESPACE
 ) -> Optional[str]:
-    """Check if the latest revision for a service has failed to start (Fast-Fail detection)."""
+    """Check if the latest revision or service has failed to start."""
+    # 1. Check Knative Revision status (Ready == False indicates a definitive failure)
     result = kubectl(
         "get",
         "revision",
@@ -192,27 +193,30 @@ def get_ksvc_failure_reason(
         "json",
         timeout=10,
     )
-    if result.returncode != 0:
-        return None
+    if result.returncode == 0:
+        try:
+            data = json.loads(result.stdout)
+            items = data.get("items", [])
+            if items:
+                latest = items[-1]
+                conditions = latest.get("status", {}).get("conditions", [])
+                for c in conditions:
+                    if c.get("type") == "Ready" and c.get("status") == "False":
+                        return c.get("message") or f"Container failed to start (Reason: {c.get('reason', 'Failed')})"
+        except Exception:
+            pass
 
-    try:
-        data = json.loads(result.stdout)
-        items = data.get("items", [])
-        if not items:
-            return None
-
-        latest = items[-1]
-        conditions = latest.get("status", {}).get("conditions", [])
-
-        for c in conditions:
-            if c.get("type") == "Ready" and c.get("status") == "False":
-                reason = c.get("reason", "")
-                msg = c.get("message", "")
-                # Crash or permanent failure indicators
-                if reason in ("ExitCode1", "ContainerMissing", "CrashLoopBackOff", "ConfigError") or "failed" in msg.lower():
-                    return msg or f"Container failed to start (Reason: {reason})"
-    except Exception:
-        return None
+    # 2. Check Knative Service overall condition
+    ksvc_raw = kubectl("get", "ksvc", name, "-n", namespace, "-o", "json", timeout=10)
+    if ksvc_raw.returncode == 0:
+        try:
+            kdata = json.loads(ksvc_raw.stdout)
+            kconds = kdata.get("status", {}).get("conditions", [])
+            for c in kconds:
+                if c.get("type") == "Ready" and c.get("status") == "False":
+                    return c.get("message") or f"Knative Service failed (Reason: {c.get('reason', 'Failed')})"
+        except Exception:
+            pass
 
     return None
 
@@ -412,32 +416,55 @@ def prune_old_configmaps(
     max_retained: int = MAX_REVISIONS_RETAINED,
     namespace: str = TENANT_NAMESPACE,
 ) -> None:
-    """Delete older versioned ConfigMaps for a function exceeding max_retained limit."""
-    result = kubectl(
+    """Delete older historical Knative Revisions and ConfigMaps exceeding max_retained limit."""
+    # 1. Prune Knative Revisions
+    rev_result = kubectl(
+        "get",
+        "revisions",
+        "-n",
+        namespace,
+        "-l",
+        f"serving.knative.dev/service={function_name}",
+        "--sort-by=.metadata.creationTimestamp",
+        "-o",
+        "json",
+        timeout=15,
+    )
+    if rev_result.returncode == 0:
+        try:
+            rev_items = json.loads(rev_result.stdout).get("items", [])
+            if len(rev_items) > max_retained:
+                excess_revs = rev_items[:-max_retained]
+                for r in excess_revs:
+                    r_name = r.get("metadata", {}).get("name", "")
+                    if r_name:
+                        logger.info("Pruning old revision: %s", r_name)
+                        kubectl("delete", "revision", r_name, "-n", namespace, "--ignore-not-found=true", timeout=15)
+        except Exception as e:
+            logger.warning("Failed to prune old revisions for %s: %s", function_name, e)
+
+    # 2. Prune ConfigMaps
+    cm_result = kubectl(
         "get",
         "configmaps",
         "-n",
         namespace,
         "-l",
         f"faas.platform/function={function_name}",
+        "--sort-by=.metadata.creationTimestamp",
         "-o",
         "json",
-        "--sort-by=.metadata.creationTimestamp",
         timeout=15,
     )
-    if result.returncode != 0:
-        return
-
-    try:
-        items = json.loads(result.stdout).get("items", [])
-        if len(items) > max_retained:
-            excess = len(items) - max_retained
-            for cm in items[:excess]:
-                cm_name = cm.get("metadata", {}).get("name", "")
-                if cm_name:
-                    logger.info("Pruning old ConfigMap: %s", cm_name)
-                    delete_configmap(cm_name, namespace)
-    except Exception as e:
-        logger.warning(
-            "Failed to prune old ConfigMaps for %s: %s", function_name, e
-        )
+    if cm_result.returncode == 0:
+        try:
+            cm_items = json.loads(cm_result.stdout).get("items", [])
+            if len(cm_items) > max_retained:
+                excess_cms = cm_items[:-max_retained]
+                for cm in excess_cms:
+                    cm_name = cm.get("metadata", {}).get("name", "")
+                    if cm_name:
+                        logger.info("Pruning old ConfigMap: %s", cm_name)
+                        delete_configmap(cm_name, namespace)
+        except Exception as e:
+            logger.warning("Failed to prune old ConfigMaps for %s: %s", function_name, e)
