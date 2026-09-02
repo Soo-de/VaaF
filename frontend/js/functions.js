@@ -11,10 +11,10 @@ import {
   deleteFunction,
   getFunctionLogs,
   proxyRequest
-} from './api.js?v=3.1';
-import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.1';
-import { DeployManager } from './deploy.js?v=3.1';
-import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey } from './utils.js?v=3.1';
+} from './api.js?v=3.2';
+import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.2';
+import { DeployManager } from './deploy.js?v=3.2';
+import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey } from './utils.js?v=3.2';
 
 
 export const FunctionsManager = {
@@ -82,7 +82,15 @@ export const FunctionsManager = {
 
     try {
       const data = await getFunctions();
-      this.functionsData = data.functions || [];
+      const rawFunctions = data.functions || [];
+
+      // Deterministic sort: most recently deployed/updated first (so [0] is always top of the list)
+      this.functionsData = rawFunctions.sort((a, b) => {
+        const da = a.updated_at ? new Date(a.updated_at).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+        const db = b.updated_at ? new Date(b.updated_at).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+        if (da !== db) return db - da;
+        return (a.name || '').localeCompare(b.name || '');
+      });
 
       // Update count badge
       const countBadge = document.getElementById('functions-count-badge');
@@ -100,14 +108,21 @@ export const FunctionsManager = {
           if (statusCol) {
             statusCol.outerHTML = this.getStatusBadge(currentActive);
           }
+          // Also silently keep open revisions or monitor tab synchronized
+          const activeTab = this.workspaceContainer?.querySelector('.panel-tab-btn.active')?.getAttribute('data-tab');
+          if (activeTab === 'revisions') {
+            this.setupRevisionsTab(currentActive);
+          } else if (activeTab === 'monitor') {
+            this.loadLogs(this.activeFunctionName, 100);
+          }
         } else if (this.functionsData.length > 0) {
-          // Active function was deleted; select the latest available function
+          // Active function was deleted; select the top-most available function
           this.selectFunction(this.functionsData[0].name);
         } else {
           this.closeWorkspace();
         }
       } else if (this.functionsData.length > 0 && !silent) {
-        // Auto-select the latest saved function on initial load
+        // Auto-select the top-most (most recently deployed/updated) function on initial load
         this.selectFunction(this.functionsData[0].name);
       } else if (this.functionsData.length === 0) {
         this.closeWorkspace();
@@ -201,8 +216,13 @@ export const FunctionsManager = {
     if (fn.deploying) {
       return `<span class="badge badge-deploying"><span class="pulse-dot"></span> Deploying</span>`;
     }
-    if (fn.ready || fn.deployed) {
+    // A function is "Deployed" if it has at least one ready revision (deployed flag)
+    // or if ready === true. It stays Deployed even when latest revision fails.
+    if (fn.deployed || fn.ready === true) {
       return `<span class="badge badge-ready"><span class="status-dot dot-green"></span> Deployed</span>`;
+    }
+    if (fn.ready === null) {
+      return `<span class="badge badge-deploying"><span class="pulse-dot"></span> Deploying</span>`;
     }
     return `<span class="badge badge-not-ready"><span class="status-dot dot-red"></span> Not Deployed</span>`;
   },
@@ -337,8 +357,16 @@ export const FunctionsManager = {
 
     const urlTextEl = clone.querySelector('.url-text');
     if (urlTextEl) {
-      urlTextEl.textContent = fn.url;
-      urlTextEl.title = fn.url;
+      urlTextEl.textContent = fn.url || 'Not Deployed';
+      if (fn.url && fn.url !== 'Not Deployed' && fn.url !== 'Henüz Deploy Edilmedi' && fn.url.startsWith('http')) {
+        urlTextEl.href = fn.url;
+        urlTextEl.title = `Yeni sekmede aç: ${fn.url}`;
+        urlTextEl.classList.remove('url-disabled');
+      } else {
+        urlTextEl.removeAttribute('href');
+        urlTextEl.title = 'Henüz deploy edilmedi';
+        urlTextEl.classList.add('url-disabled');
+      }
     }
 
     const copyBtn = clone.querySelector('.copy-url-btn');
@@ -369,6 +397,18 @@ export const FunctionsManager = {
     // Main Tab Switcher
     const tabBtns = ws.querySelectorAll('.panel-tab-btn');
     const tabPanes = ws.querySelectorAll('.panel-tab-content');
+    const tabRefreshBtn = ws.querySelector('.btn-tab-refresh');
+
+    const updateRefreshVisibility = (tab) => {
+      if (tabRefreshBtn) {
+        if (tab === 'revisions' || tab === 'monitor') {
+          tabRefreshBtn.classList.remove('hidden');
+        } else {
+          tabRefreshBtn.classList.add('hidden');
+        }
+      }
+    };
+
     tabBtns.forEach(btn => {
       btn.addEventListener('click', () => {
         const targetTab = btn.getAttribute('data-tab');
@@ -385,6 +425,8 @@ export const FunctionsManager = {
           }
         });
 
+        updateRefreshVisibility(targetTab);
+
         if (targetTab === 'test') {
           this.setupTestTab(fn);
         } else if (targetTab === 'revisions') {
@@ -396,6 +438,25 @@ export const FunctionsManager = {
         }
       });
     });
+
+    // Tab-bar refresh button: context-sensitive
+    if (tabRefreshBtn) {
+      tabRefreshBtn.addEventListener('click', async () => {
+        const svgIcon = tabRefreshBtn.querySelector('svg');
+        svgIcon?.classList.add('spin-anim');
+
+        const activeTab = ws.querySelector('.panel-tab-btn.active')?.getAttribute('data-tab');
+        if (activeTab === 'revisions') {
+          await this.setupRevisionsTab(fn);
+          Toast.info('Sürümler yenilendi');
+        } else if (activeTab === 'monitor') {
+          await this.loadLogs(fnName, 100);
+          Toast.info('Loglar yenilendi');
+        }
+
+        setTimeout(() => svgIcon?.classList.remove('spin-anim'), 400);
+      });
+    }
 
     // Subtabs: Editor vs Env
     const subtabBtns = ws.querySelectorAll('.subtab-btn');
@@ -533,14 +594,18 @@ export const FunctionsManager = {
           }
           session.code = latestCode;
           this.loadFunctions(true);
+          this.refreshActiveRevisions();
         },
         onError: () => {
           if (currentFn) {
             currentFn.deploying = false;
+            // Preserve deployed state when function has existing ready revisions
             this.renderList();
             const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
             if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
           }
+          this.loadFunctions(true);
+          this.refreshActiveRevisions();
         }
       });
     });
@@ -771,24 +836,28 @@ export const FunctionsManager = {
   async setupMonitorTab(fn) {
     const fnName = fn.name;
     const ws = this.workspaceContainer;
-    const refreshBtn = ws?.querySelector('.btn-refresh-logs');
 
     if (!fn.deployed && !fn.ready) {
       const logsTerminal = ws?.querySelector('.logs-terminal');
       if (logsTerminal) {
-        logsTerminal.innerHTML = `<div class="text-muted">Fonksiyon henüz cluster'a deploy edilmediği için pod logu bulunmuyor.</div>`;
+        logsTerminal.innerHTML = `
+          <div class="empty-state tab-empty-state">
+            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+              <line x1="6" y1="8" x2="10" y2="8"></line>
+              <line x1="6" y1="11" x2="14" y2="11"></line>
+            </svg>
+            <h4 class="empty-state-title">Pod Logu Bulunmuyor</h4>
+            <p class="text-muted">Bu fonksiyon henüz Kubernetes cluster'a deploy edilmedi. Kod sekmesinden "Deploy" butonuna basarak ilk dağıtımı başlatabilirsiniz.</p>
+          </div>
+        `;
       }
       return;
     }
 
     this.loadLogs(fnName, 100);
-
-    if (refreshBtn && refreshBtn.dataset.bound !== 'true') {
-      refreshBtn.dataset.bound = 'true';
-      refreshBtn.addEventListener('click', () => {
-        this.loadLogs(fnName, 100);
-      });
-    }
   },
 
   async loadLogs(fnName, tail = 100) {
@@ -796,13 +865,22 @@ export const FunctionsManager = {
     const logsTerminal = ws?.querySelector('.logs-terminal');
     if (!logsTerminal) return;
 
-    logsTerminal.innerHTML = `<div class="text-muted">Loglar yükleniyor...</div>`;
+    logsTerminal.innerHTML = `<div class="text-muted" style="text-align: center; padding: 2rem;">Loglar yükleniyor...</div>`;
 
     try {
       const data = await getFunctionLogs(fnName, tail);
       const logs = data.logs || [];
       if (logs.length === 0) {
-        logsTerminal.innerHTML = `<div class="text-muted">${escapeHtml(data.message || 'Kayıtlı pod logu bulunmuyor (fonksiyon sıfıra ölçeklenmiş olabilir).')}</div>`;
+        logsTerminal.innerHTML = `
+          <div class="empty-state tab-empty-state">
+            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+              <polyline points="4 17 10 11 4 5"></polyline>
+              <line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+            <h4 class="empty-state-title">Aktif Pod Logu Yok</h4>
+            <p class="text-muted">${escapeHtml(data.message || 'Kayıtlı pod logu bulunmuyor. Fonksiyon inaktif veya 0 pod durumuna ölçeklenmiş olabilir. Test sekmesinden istek atarak podu uyandırabilirsiniz.')}</p>
+          </div>
+        `;
         return;
       }
       logsTerminal.innerHTML = logs
@@ -810,8 +888,16 @@ export const FunctionsManager = {
         .join('');
       logsTerminal.scrollTop = logsTerminal.scrollHeight;
     } catch (err) {
-      logsTerminal.innerHTML = `<div class="log-line text-danger">Loglar alınamadı: ${escapeHtml(err.message)}</div>`;
+      logsTerminal.innerHTML = `<div class="log-line text-danger" style="text-align: center; padding: 2rem;">Loglar alınamadı: ${escapeHtml(err.message)}</div>`;
     }
+  },
+
+  refreshActiveRevisions() {
+    if (!this.activeFunctionName || !this.workspaceContainer) return;
+    const revisionsPane = this.workspaceContainer.querySelector('.panel-tab-content[data-content-tab="revisions"]');
+    if (!revisionsPane) return;
+    const fn = this.functionsData.find(f => f.name === this.activeFunctionName);
+    if (fn) this.setupRevisionsTab(fn);
   },
 
   async setupRevisionsTab(fn) {
@@ -825,7 +911,17 @@ export const FunctionsManager = {
       const revisions = res.revisions || [];
 
       if (revisions.length === 0) {
-        revisionsContainer.innerHTML = `<div class="text-muted p-3">Henüz sürüm geçmişi bulunmuyor.</div>`;
+        revisionsContainer.innerHTML = `
+          <div class="empty-state tab-empty-state">
+            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+            <h4 class="empty-state-title">Henüz Sürüm Geçmişi Yok</h4>
+            <p class="text-muted">Bu fonksiyona ait dağıtılmış geçmiş bir revizyon kaydı bulunmuyor. Kod sekmesinden yeni bir dağıtım (deploy) başlatabilirsiniz.</p>
+          </div>
+        `;
         return;
       }
 
@@ -844,26 +940,30 @@ export const FunctionsManager = {
 
       revisions.forEach(rev => {
         const isActive = rev.is_active;
-        const isReady = rev.is_ready !== false;
 
+        // Tri-state status badge
         let statusBadge = '';
         if (isActive) {
           statusBadge = '<span class="badge badge-active">✅ Aktif</span>';
-        } else if (!isReady) {
+        } else if (rev.is_ready === true) {
+          statusBadge = '<span class="badge badge-passive">✔ Hazır</span>';
+        } else if (rev.is_ready === false) {
           statusBadge = '<span class="badge badge-not-ready">❌ Hatalı</span>';
         } else {
-          statusBadge = '<span class="badge badge-passive">⬜ Pasif</span>';
+          statusBadge = '<span class="badge badge-deploying"><span class="pulse-dot"></span> Hazırlanıyor</span>';
         }
 
-        let actionButtons = '';
-        if (!isActive) {
-          if (isReady) {
-            actionButtons += `<button class="btn btn-secondary btn-xs btn-rollback" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Rollback</button> `;
-          }
-          actionButtons += `<button class="btn btn-secondary btn-xs btn-load-code" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Kodu Yükle</button>`;
+        let rollbackBtn = '';
+        if (isActive) {
+          rollbackBtn = `<button class="btn btn-secondary btn-xs btn-rollback" disabled title="Bu sürüm zaten aktif">Rollback</button>`;
+        } else if (rev.is_ready === false) {
+          rollbackBtn = `<button class="btn btn-secondary btn-xs btn-rollback" disabled title="Hatalı sürüme rollback yapılamaz">Rollback</button>`;
         } else {
-          actionButtons = '—';
+          rollbackBtn = `<button class="btn btn-secondary btn-xs btn-rollback" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Rollback</button>`;
         }
+
+        const loadCodeBtn = `<button class="btn btn-secondary btn-xs btn-load-code" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Kodu Yükle</button>`;
+        const actionButtons = `<div style="display: inline-flex; gap: 0.4rem; align-items: center;">${rollbackBtn}${loadCodeBtn}</div>`;
 
         rows += `
           <tr>
@@ -893,7 +993,13 @@ export const FunctionsManager = {
             try {
               const rbRes = await rollbackRevision(fnName, rName);
               Toast.success(rbRes.message || 'Rollback tamamlandı.');
-              this.setupRevisionsTab(fn);
+              
+              // Invalidate session cache so editor can pull rolled back code
+              this.sessionCache.delete(fnName);
+
+              // Immediately re-fetch and re-render revisions
+              await this.setupRevisionsTab(fn);
+              await this.loadFunctions(true);
             } catch (err) {
               Toast.error(`Rollback başarısız: ${err.message}`);
             }
@@ -901,10 +1007,20 @@ export const FunctionsManager = {
         });
       });
 
-      // Bind Load Code
+      // Bind Load Code (with confirmation modal)
       revisionsContainer.querySelectorAll('.btn-load-code').forEach(btn => {
         btn.addEventListener('click', async () => {
           const rName = btn.getAttribute('data-rev');
+
+          const confirmed = await Modal.confirm({
+            title: 'Sürüm Kodunu Yükle',
+            message: 'Bu sürümün kodunu editöre yüklemek istediğinize emin misiniz? Editördeki mevcut ve henüz deploy edilmemiş değişiklikleriniz kaybolacaktır.',
+            confirmText: 'Kodu Yükle',
+            type: 'primary'
+          });
+
+          if (!confirmed) return;
+
           try {
             const revCodeRes = await getRevisionCode(fnName, rName);
             if (revCodeRes && revCodeRes.code) {

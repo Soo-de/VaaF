@@ -247,14 +247,28 @@ def list_ksvc(
         status = item.get("status", {})
         conditions = status.get("conditions", [])
 
-        ready = next(
-            (
-                c["status"] == "True"
-                for c in conditions
-                if c.get("type") == "Ready"
-            ),
-            False,
+        # Tri-state ready: True / None (unknown/deploying) / False (failed)
+        ready_cond = next(
+            (c for c in conditions if c.get("type") == "Ready"), None
         )
+        if ready_cond is None:
+            ready = None
+        elif ready_cond.get("status") == "True":
+            ready = True
+        elif ready_cond.get("status") == "False":
+            ready = False
+        else:
+            ready = None
+
+        latest_ready_rev = status.get("latestReadyRevisionName", "")
+        has_ready_revision = bool(latest_ready_rev)
+
+        # Last update timestamp from the most recent condition transition
+        updated_at = meta.get("creationTimestamp", "")
+        for c in conditions:
+            ts = c.get("lastTransitionTime", "")
+            if ts > updated_at:
+                updated_at = ts
 
         display_name = labels.get("faas.platform/display-name") or meta.get(
             "name", ""
@@ -266,7 +280,9 @@ def list_ksvc(
                 "service_name": meta.get("name", ""),
                 "url": status.get("url", ""),
                 "ready": ready,
+                "deployed": has_ready_revision,
                 "created_at": meta.get("creationTimestamp", ""),
+                "updated_at": updated_at,
                 "runtime": "python",
                 "namespace": namespace,
                 "user_id": labels.get("faas.platform/user", "default"),
@@ -311,11 +327,23 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
     if ksvc_result.returncode == 0:
         try:
             ksvc_data = json.loads(ksvc_result.stdout)
-            traffic = ksvc_data.get("status", {}).get("traffic", [])
-            for t in traffic:
-                if t.get("percent", 0) == 100:
+            
+            # 1. Check spec.traffic first (immediate rollback / explicit pin)
+            for t in ksvc_data.get("spec", {}).get("traffic", []):
+                if t.get("percent", 0) == 100 and t.get("revisionName"):
                     current_traffic_revision = t.get("revisionName", "")
                     break
+
+            # 2. Fallback to status.traffic
+            if not current_traffic_revision:
+                for t in ksvc_data.get("status", {}).get("traffic", []):
+                    if t.get("percent", 0) == 100 and t.get("revisionName"):
+                        current_traffic_revision = t.get("revisionName", "")
+                        break
+
+            # 3. Fallback to latestReadyRevisionName
+            if not current_traffic_revision:
+                current_traffic_revision = ksvc_data.get("status", {}).get("latestReadyRevisionName", "")
         except Exception:
             pass
 
@@ -344,10 +372,20 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
         meta = item.get("metadata", {})
         status = item.get("status", {})
         conditions = status.get("conditions", [])
-        is_ready = any(
-            c.get("type") == "Ready" and c.get("status") == "True"
-            for c in conditions
+
+        # Tri-state: True (ready), None (unknown/deploying), False (failed)
+        ready_cond = next(
+            (c for c in conditions if c.get("type") == "Ready"), None
         )
+        if ready_cond is None:
+            is_ready = None
+        elif ready_cond.get("status") == "True":
+            is_ready = True
+        elif ready_cond.get("status") == "False":
+            is_ready = False
+        else:
+            is_ready = None
+
         rev_name = meta.get("name", "")
         revisions.append(
             {

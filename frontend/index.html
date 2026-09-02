@@ -15,7 +15,7 @@
     rel="stylesheet" />
 
   <!-- Main Stylesheet -->
-  <link rel="stylesheet" href="./style.css?v=3.1" />
+  <link rel="stylesheet" href="./style.css?v=3.2" />
 
 
   <!-- Immediate Theme Initialization Script (Prevents flash and syncs Monaco) -->
@@ -197,7 +197,7 @@
             <span class="workspace-status-badge-slot"></span>
           </div>
           <div class="workspace-url-box">
-            <span class="url-text"></span>
+            <a class="url-text" href="#" target="_blank" rel="noopener noreferrer" title="Yeni sekmede aç"></a>
             <button class="icon-btn copy-url-btn" title="Kopyala">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
             </button>
@@ -213,21 +213,31 @@
 
       <!-- Navigation Tabs -->
       <div class="panel-tabs-bar">
-        <button class="panel-tab-btn active" data-tab="code">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
-          <span>Kod</span>
-        </button>
-        <button class="panel-tab-btn" data-tab="test">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          <span>Test</span>
-        </button>
-        <button class="panel-tab-btn" data-tab="revisions">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
-          <span>Sürümler</span>
-        </button>
-        <button class="panel-tab-btn" data-tab="monitor">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-          <span>Monitor</span>
+        <div class="panel-tabs-left">
+          <button class="panel-tab-btn active" data-tab="code">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+            <span>Kod</span>
+          </button>
+          <button class="panel-tab-btn" data-tab="test">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            <span>Test</span>
+          </button>
+          <button class="panel-tab-btn" data-tab="revisions">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+            <span>Sürümler</span>
+          </button>
+          <button class="panel-tab-btn" data-tab="monitor">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+            <span>Monitor</span>
+          </button>
+        </div>
+        <button class="btn btn-tab-refresh hidden" id="workspace-tab-refresh-btn" title="Sekmeyi Yenile">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M23 4v6h-6"></path>
+            <path d="M1 20v-6h6"></path>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          <span>Yenile</span>
         </button>
       </div>
 
@@ -342,12 +352,6 @@
             <div class="monitor-title-group">
               <span class="section-title">Knative Pod Logları (Son 100 Satır)</span>
             </div>
-            <div class="monitor-actions">
-              <button class="btn btn-secondary btn-sm btn-refresh-logs">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
-                <span>Logları Yenile</span>
-              </button>
-            </div>
           </div>
           <div class="logs-terminal">
             <div class="text-muted">Loglar yükleniyor...</div>
@@ -361,7 +365,7 @@
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
 
   <!-- Application Modules -->
-  <script type="module" src="./js/app.js?v=3.1"></script>
+  <script type="module" src="./js/app.js?v=3.2"></script>
 
 </body>
 
