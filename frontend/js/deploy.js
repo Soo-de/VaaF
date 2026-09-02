@@ -16,9 +16,10 @@ export const DeployManager = {
    * @param {Object} [params.envVars={}]
    * @param {HTMLElement} params.consoleElement
    * @param {HTMLButtonElement} params.deployBtn
-   * @param {function(): void} [params.onComplete]
+   * @param {function(Object=): void} [params.onComplete]
+   * @param {function(Error=): void} [params.onError]
    */
-  async runDeploy({ functionName, code, isUpdate = false, envVars = {}, consoleElement, deployBtn, onComplete }) {
+  async runDeploy({ functionName, code, isUpdate = false, envVars = {}, consoleElement, deployBtn, onComplete, onError }) {
     if (!consoleElement) return;
 
     // Show console container if hidden
@@ -99,6 +100,7 @@ export const DeployManager = {
             } else {
               appendLog('error', `Deploy tamamlanamadı: ${data}`);
               Toast.error(`'${functionName}' deploy edilirken hata oluştu.`);
+              if (onError) onError(new Error(data));
             }
           }
         }
@@ -108,6 +110,7 @@ export const DeployManager = {
     } catch (err) {
       appendLog('error', `Deploy Hatası: ${err.message}`);
       Toast.error(`Deploy başarısız: ${err.message}`);
+      if (onError) onError(err);
     } finally {
       if (deployBtn) {
         deployBtn.classList.remove('loading');

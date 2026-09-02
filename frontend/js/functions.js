@@ -507,6 +507,14 @@ export const FunctionsManager = {
       const currentFn = this.functionsData.find(f => f.name === fnName);
       const isUpdate = Boolean(currentFn && (currentFn.ready || currentFn.deployed || (currentFn.revisions && currentFn.revisions.length > 0)));
 
+      // Set deploying visual state immediately (in list and workspace header)
+      if (currentFn) {
+        currentFn.deploying = true;
+        this.renderList();
+        const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+        if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+      }
+
       // Format console container wrapper for DeployManager
       const consoleWrapper = ws.querySelector('.ide-output-container');
 
@@ -519,11 +527,20 @@ export const FunctionsManager = {
         deployBtn,
         onComplete: () => {
           if (currentFn) {
+            currentFn.deploying = false;
             currentFn.ready = true;
             currentFn.deployed = true;
           }
           session.code = latestCode;
           this.loadFunctions(true);
+        },
+        onError: () => {
+          if (currentFn) {
+            currentFn.deploying = false;
+            this.renderList();
+            const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+            if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+          }
         }
       });
     });
@@ -827,21 +844,33 @@ export const FunctionsManager = {
 
       revisions.forEach(rev => {
         const isActive = rev.is_active;
+        const isReady = rev.is_ready !== false;
+
+        let statusBadge = '';
+        if (isActive) {
+          statusBadge = '<span class="badge badge-active">✅ Aktif</span>';
+        } else if (!isReady) {
+          statusBadge = '<span class="badge badge-not-ready">❌ Hatalı</span>';
+        } else {
+          statusBadge = '<span class="badge badge-passive">⬜ Pasif</span>';
+        }
+
+        let actionButtons = '';
+        if (!isActive) {
+          if (isReady) {
+            actionButtons += `<button class="btn btn-secondary btn-xs btn-rollback" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Rollback</button> `;
+          }
+          actionButtons += `<button class="btn btn-secondary btn-xs btn-load-code" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Kodu Yükle</button>`;
+        } else {
+          actionButtons = '—';
+        }
+
         rows += `
           <tr>
             <td><code class="revision-code">${escapeHtml(rev.name)}</code></td>
             <td>${formatDate(rev.created_at)}</td>
-            <td>
-              ${isActive
-                ? '<span class="badge badge-active">✅ Aktif</span>'
-                : '<span class="badge badge-passive">⬜ Pasif</span>'}
-            </td>
-            <td>
-              ${!isActive ? `
-                <button class="btn btn-secondary btn-xs btn-rollback" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Rollback</button>
-                <button class="btn btn-secondary btn-xs btn-load-code" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Kodu Yükle</button>
-              ` : '—'}
-            </td>
+            <td>${statusBadge}</td>
+            <td>${actionButtons}</td>
           </tr>
         `;
       });
@@ -878,11 +907,15 @@ export const FunctionsManager = {
           const rName = btn.getAttribute('data-rev');
           try {
             const revCodeRes = await getRevisionCode(fnName, rName);
-            const editor = getEditor(`editor-main-${fnName}`);
-            if (editor && revCodeRes && revCodeRes.code) {
+            if (revCodeRes && revCodeRes.code) {
               const session = this.getSession(fnName);
               session.code = revCodeRes.code;
-              editor.setValue(revCodeRes.code);
+
+              const editor = getEditor(`editor-main-${fnName}`);
+              if (editor) {
+                editor.setValue(revCodeRes.code);
+              }
+
               Toast.success(`'${rName}' sürümünün kodu editöre yüklendi.`);
 
               // Switch to Code Tab

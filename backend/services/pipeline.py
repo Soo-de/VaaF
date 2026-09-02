@@ -14,10 +14,6 @@ from typing import AsyncGenerator, Optional
 
 from config import (
     BASE_RUNTIME_IMAGE,
-    DEFAULT_CPU_LIMIT,
-    DEFAULT_CPU_REQUEST,
-    DEFAULT_MEMORY_LIMIT,
-    DEFAULT_MEMORY_REQUEST,
     DEPLOY_TIMEOUT,
     MAX_REVISIONS_RETAINED,
     POLL_INTERVAL,
@@ -33,6 +29,10 @@ from services.k8s import (
     prune_old_configmaps,
     resolve_namespace,
     resolve_service_name,
+)
+from services.manifest import (
+    build_configmap_manifest,
+    build_knative_service_manifest,
 )
 from services.sse import sse_event
 
@@ -65,20 +65,20 @@ async def run_deploy_pipeline(
         # ── STEP 1: Create Versioned ConfigMap for User Code ──────────────────
         yield sse_event("step", "📦 Step 1/3 — Saving function code to cluster...")
 
-        cm_data = {"handler.py": req.code}
-        cm_labels = {
-            "faas.platform/function": req.name,
-            "faas.platform/display-name": req.name,
-            "faas.platform/user": active_user,
-            "faas.platform/deploy-id": job_id,
-            "faas.platform/managed-by": "vaaf-platform",
-        }
+        cm_manifest = build_configmap_manifest(
+            function_name=req.name,
+            code=req.code,
+            configmap_name=configmap_name,
+            target_namespace=target_namespace,
+            active_user=active_user,
+            job_id=job_id,
+        )
 
         cm_res = apply_configmap(
             name=configmap_name,
-            data=cm_data,
+            data=cm_manifest["data"],
             namespace=target_namespace,
-            labels=cm_labels,
+            labels=cm_manifest["metadata"]["labels"],
         )
 
         if cm_res.returncode != 0:
@@ -95,86 +95,17 @@ async def run_deploy_pipeline(
         # ── STEP 2: Generate & Apply Knative Service Manifest ─────────────────
         yield sse_event("step", "🚀 Step 2/3 — Applying Knative Service manifest...")
 
-        # Convert user-provided environment dictionary into container EnvVar list
-        env_vars = [
-            {"name": "FUNCTION_NAME", "value": req.name},
-            {"name": "HANDLER_PATH", "value": "/var/task/handler.py"},
-            {"name": "DEPLOY_ID", "value": job_id},
-        ]
         if req.environment:
-            for env_k, env_v in req.environment.items():
-                env_vars.append({"name": env_k, "value": str(env_v)})
             yield sse_event("log", f"   → Injected {len(req.environment)} custom environment variables")
 
-        ksvc_manifest = {
-            "apiVersion": "serving.knative.dev/v1",
-            "kind": "Service",
-            "metadata": {
-                "name": k8s_svc_name,
-                "namespace": target_namespace,
-                "labels": {
-                    "faas.platform/function": req.name,
-                    "faas.platform/display-name": req.name,
-                    "faas.platform/user": active_user,
-                    "faas.platform/runtime": "python",
-                    "faas.platform/managed-by": "vaaf-platform",
-                },
-            },
-            "spec": {
-                "traffic": [
-                    {
-                        "latestRevision": True,
-                        "percent": 100,
-                    }
-                ],
-                "template": {
-                    "metadata": {
-                        "annotations": {
-                            "autoscaling.knative.dev/min-scale": "0",
-                            "autoscaling.knative.dev/max-scale": "5",
-                            "autoscaling.knative.dev/target": "10",
-                            "faas.platform/deploy-id": job_id,
-                        },
-                    },
-                    "spec": {
-                        "containers": [
-                            {
-                                "name": "user-container",
-                                "image": BASE_RUNTIME_IMAGE,
-                                "imagePullPolicy": "IfNotPresent",
-                                "ports": [{"containerPort": 8080}],
-                                "env": env_vars,
-                                "resources": {
-                                    "requests": {
-                                        "cpu": DEFAULT_CPU_REQUEST,
-                                        "memory": DEFAULT_MEMORY_REQUEST,
-                                    },
-                                    "limits": {
-                                        "cpu": DEFAULT_CPU_LIMIT,
-                                        "memory": DEFAULT_MEMORY_LIMIT,
-                                    },
-                                },
-                                "volumeMounts": [
-                                    {
-                                        "name": "user-code",
-                                        "mountPath": "/var/task",
-                                        "readOnly": True,
-                                    }
-                                ],
-                            }
-                        ],
-                        "volumes": [
-                            {
-                                "name": "user-code",
-                                "configMap": {
-                                    "name": configmap_name,
-                                },
-                            }
-                        ],
-                    },
-                }
-            },
-        }
+        ksvc_manifest = build_knative_service_manifest(
+            req=req,
+            k8s_svc_name=k8s_svc_name,
+            configmap_name=configmap_name,
+            target_namespace=target_namespace,
+            active_user=active_user,
+            job_id=job_id,
+        )
 
         ksvc_res = apply_knative_service(ksvc_manifest)
         if ksvc_res.returncode != 0:

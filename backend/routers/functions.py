@@ -164,8 +164,12 @@ async def get_function_revisions(
 
 
 @router.get(
-    "/functions/{name}/revision/{revision_name}/code",
+    "/functions/{name}/revisions/{revision_name}/code",
     summary="Get source code for a specific historical revision",
+)
+@router.get(
+    "/functions/{name}/revision/{revision_name}/code",
+    include_in_schema=False,
 )
 async def get_revision_code(
     name: str,

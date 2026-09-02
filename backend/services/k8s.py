@@ -132,7 +132,7 @@ def apply_knative_service(
 def get_ksvc_ready_url(
     name: str, namespace: str = TENANT_NAMESPACE
 ) -> Optional[str]:
-    """Return the function URL once the Knative Service status is Ready=True."""
+    """Return the function URL once Knative Service has fully reconciled the newest revision and Ready=True."""
     result = kubectl(
         "get",
         "ksvc",
@@ -140,10 +140,40 @@ def get_ksvc_ready_url(
         "-n",
         namespace,
         "-o",
-        "jsonpath={.status.conditions[?(@.type=='Ready')].status} {.status.url}",
+        "json",
+        timeout=10,
     )
-    parts = result.stdout.split()
-    return parts[1] if len(parts) == 2 and parts[0] == "True" else None
+    if result.returncode != 0:
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+        meta_gen = data.get("metadata", {}).get("generation", 0)
+        status = data.get("status", {})
+        obs_gen = status.get("observedGeneration", -1)
+
+        # 1. Controller must have observed the latest applied generation
+        if obs_gen < meta_gen:
+            return None
+
+        # 2. Latest created revision must match latest ready revision
+        latest_created = status.get("latestCreatedRevisionName")
+        latest_ready = status.get("latestReadyRevisionName")
+        if not latest_created or latest_created != latest_ready:
+            return None
+
+        # 3. Overall Ready condition must be True
+        conditions = status.get("conditions", [])
+        is_ready = any(
+            c.get("type") == "Ready" and c.get("status") == "True"
+            for c in conditions
+        )
+        if not is_ready:
+            return None
+
+        return status.get("url")
+    except Exception:
+        return None
 
 
 def list_ksvc(
@@ -267,12 +297,19 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
     revisions = []
     for item in reversed(data.get("items", [])):
         meta = item.get("metadata", {})
+        status = item.get("status", {})
+        conditions = status.get("conditions", [])
+        is_ready = any(
+            c.get("type") == "Ready" and c.get("status") == "True"
+            for c in conditions
+        )
         rev_name = meta.get("name", "")
         revisions.append(
             {
                 "name": rev_name,
                 "created_at": meta.get("creationTimestamp", ""),
                 "is_active": rev_name == current_traffic_revision,
+                "is_ready": is_ready,
                 "has_code": True,
             }
         )
@@ -282,7 +319,24 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
 def rollback_to_revision(
     service_name: str, revision_name: str, namespace: str = TENANT_NAMESPACE
 ) -> tuple[bool, str]:
-    """Route 100% of traffic to a specific historical revision."""
+    """Route 100% of traffic to a specific historical revision with health guard."""
+    # 1. Guard: Check if target revision is healthy
+    rev_check = kubectl(
+        "get",
+        "revision",
+        revision_name,
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.status.conditions[?(@.type=='Ready')].status}",
+        timeout=10,
+    )
+    if rev_check.stdout.strip() != "True":
+        return (
+            False,
+            f"'{revision_name}' sürümü sağlıklı başlatılamadığı (hatalı olduğu) için bu sürüme rollback yapılamaz. Lütfen 'Kodu Yükle' butonu ile kodu inceleyip düzeltin.",
+        )
+
     patch = json.dumps(
         {
             "spec": {
