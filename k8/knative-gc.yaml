@@ -1,0 +1,18 @@
+# ============================================================
+#  VaaF/k8/knative-gc.yaml
+#  Knative Serving Native Garbage Collection Configuration
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-gc
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/name: knative-serving
+data:
+  # Retain at most 10 non-active revisions per function
+  max-non-active-revisions: "10"
+  min-non-active-revisions: "0"
+  retain-since-create-time: "disabled"
+  retain-since-last-active-time: "disabled"

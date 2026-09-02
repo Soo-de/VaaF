@@ -176,6 +176,47 @@ def get_ksvc_ready_url(
         return None
 
 
+def get_ksvc_failure_reason(
+    name: str, namespace: str = TENANT_NAMESPACE
+) -> Optional[str]:
+    """Check if the latest revision for a service has failed to start (Fast-Fail detection)."""
+    result = kubectl(
+        "get",
+        "revision",
+        "-n",
+        namespace,
+        "-l",
+        f"serving.knative.dev/service={name}",
+        "--sort-by=.metadata.creationTimestamp",
+        "-o",
+        "json",
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+        items = data.get("items", [])
+        if not items:
+            return None
+
+        latest = items[-1]
+        conditions = latest.get("status", {}).get("conditions", [])
+
+        for c in conditions:
+            if c.get("type") == "Ready" and c.get("status") == "False":
+                reason = c.get("reason", "")
+                msg = c.get("message", "")
+                # Crash or permanent failure indicators
+                if reason in ("ExitCode1", "ContainerMissing", "CrashLoopBackOff", "ConfigError") or "failed" in msg.lower():
+                    return msg or f"Container failed to start (Reason: {reason})"
+    except Exception:
+        return None
+
+    return None
+
+
 def list_ksvc(
     namespace: str = TENANT_NAMESPACE, user_id: Optional[str] = None
 ) -> list[dict]:

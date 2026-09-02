@@ -83,11 +83,13 @@ export const DeployManager = {
             appendLog('url', data);
           } else if (eventType === 'done') {
             let status = 'success';
+            let detail = data;
             try {
               const parsed = JSON.parse(data);
               status = parsed.status || 'success';
+              detail = parsed.detail || parsed.error || data;
             } catch {
-              // ignore
+              detail = data;
             }
 
             if (status === 'success') {
@@ -98,9 +100,9 @@ export const DeployManager = {
               consoleBody.scrollTop = consoleBody.scrollHeight;
               Toast.success(`'${functionName}' başarıyla deploy edildi!`);
             } else {
-              appendLog('error', `Deploy tamamlanamadı: ${data}`);
+              appendLog('error', `Deploy tamamlanamadı: ${detail}`);
               Toast.error(`'${functionName}' deploy edilirken hata oluştu.`);
-              if (onError) onError(new Error(data));
+              if (onError) onError(new Error(detail));
             }
           }
         }
