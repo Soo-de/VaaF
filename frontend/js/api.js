@@ -39,7 +39,8 @@ const DRAFT_STORAGE_KEY = 'faas_drafts';
 export function getLocalDrafts() {
   try {
     const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(d => d && typeof d.name === 'string' && d.name.trim().length > 0) : [];
   } catch {
     return [];
   }
@@ -47,6 +48,7 @@ export function getLocalDrafts() {
 
 export function saveLocalDraft(draft) {
   try {
+    if (!draft || !draft.name) return;
     const drafts = getLocalDrafts().filter(d => d.name !== draft.name);
     drafts.unshift(draft);
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
@@ -55,6 +57,7 @@ export function saveLocalDraft(draft) {
 
 export function removeLocalDraft(name) {
   try {
+    if (!name) return;
     const drafts = getLocalDrafts().filter(d => d.name !== name);
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
   } catch {}

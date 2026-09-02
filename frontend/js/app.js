@@ -2,11 +2,11 @@
  * Main application bootstrap and event bindings for FaaS Platform.
  */
 
-import { ThemeManager } from './theme.js?v=3.2';
-import { FunctionsManager } from './functions.js?v=3.2';
-import { initMonaco } from './editor.js?v=3.2';
-import { getHealth, DEFAULT_TEMPLATE_CODE, deployFunctionStream, createDraftFunction } from './api.js?v=3.2';
-import { Toast, validateFunctionName } from './utils.js?v=3.2';
+import { ThemeManager } from './theme.js?v=3.3';
+import { FunctionsManager } from './functions.js?v=3.3';
+import { initMonaco } from './editor.js?v=3.3';
+import { getHealth, DEFAULT_TEMPLATE_CODE, deployFunctionStream, createDraftFunction } from './api.js?v=3.3';
+import { Toast, validateFunctionName } from './utils.js?v=3.3';
 
 
 class App {

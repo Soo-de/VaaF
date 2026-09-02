@@ -11,10 +11,10 @@ import {
   deleteFunction,
   getFunctionLogs,
   proxyRequest
-} from './api.js?v=3.2';
-import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.2';
-import { DeployManager } from './deploy.js?v=3.2';
-import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey } from './utils.js?v=3.2';
+} from './api.js?v=3.3';
+import { createEditor, getEditor, disposeEditor } from './editor.js?v=3.3';
+import { DeployManager } from './deploy.js?v=3.3';
+import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey, getHttpStatusText } from './utils.js?v=3.3';
 
 
 export const FunctionsManager = {
@@ -82,15 +82,17 @@ export const FunctionsManager = {
 
     try {
       const data = await getFunctions();
-      const rawFunctions = data.functions || [];
+      const rawFunctions = (data && Array.isArray(data.functions)) ? data.functions : [];
 
-      // Deterministic sort: most recently deployed/updated first (so [0] is always top of the list)
-      this.functionsData = rawFunctions.sort((a, b) => {
-        const da = a.updated_at ? new Date(a.updated_at).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
-        const db = b.updated_at ? new Date(b.updated_at).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
-        if (da !== db) return db - da;
-        return (a.name || '').localeCompare(b.name || '');
-      });
+      // Filter valid items and sort: most recently deployed/updated first
+      this.functionsData = rawFunctions
+        .filter(f => f && typeof f.name === 'string' && f.name.length > 0)
+        .sort((a, b) => {
+          const da = a.updated_at ? new Date(a.updated_at).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+          const db = b.updated_at ? new Date(b.updated_at).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+          if (da !== db) return db - da;
+          return (a.name || '').localeCompare(b.name || '');
+        });
 
       // Update count badge
       const countBadge = document.getElementById('functions-count-badge');
@@ -162,7 +164,7 @@ export const FunctionsManager = {
     }
 
     const filtered = this.searchQuery
-      ? this.functionsData.filter(f => f.name.toLowerCase().includes(this.searchQuery))
+      ? this.functionsData.filter(f => f && typeof f.name === 'string' && f.name.toLowerCase().includes(this.searchQuery))
       : this.functionsData;
 
     if (filtered.length === 0) {
@@ -780,7 +782,9 @@ export const FunctionsManager = {
           body: reqBody
         });
 
-        const isSuccess = res.statusCode >= 200 && res.statusCode < 300;
+        const statusCode = Number(res.statusCode) || 200;
+        const isSuccess = statusCode >= 200 && statusCode < 300;
+        const statusText = getHttpStatusText(statusCode);
 
         if (resultBox) {
           resultBox.classList.remove('hidden', 'lambda-test-success', 'lambda-test-fail');
@@ -790,12 +794,24 @@ export const FunctionsManager = {
         if (iconEl) iconEl.textContent = isSuccess ? '✔' : '✖';
         if (titleEl) titleEl.textContent = isSuccess ? 'Yürütme işlevi: başarılı' : 'Yürütme işlevi: başarısız';
         if (badgeEl) {
-          badgeEl.textContent = `${res.statusCode} ${isSuccess ? 'OK' : 'Error'}`;
+          badgeEl.textContent = `${statusCode} ${statusText}`;
           badgeEl.className = `badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
         }
-        if (durEl) durEl.textContent = `${res.durationMs} ms`;
+        if (durEl) durEl.textContent = `${res.durationMs || 0} ms`;
+
+        // Format response payload cleanly (auto-parse nested JSON strings if present)
         if (bodyPre) {
-          bodyPre.textContent = typeof res.body === 'object' ? JSON.stringify(res.body, null, 2) : String(res.body);
+          let formattedContent = res.body;
+          if (typeof res.body === 'string') {
+            try {
+              formattedContent = JSON.parse(res.body);
+            } catch {
+              formattedContent = res.body;
+            }
+          }
+          bodyPre.textContent = typeof formattedContent === 'object' && formattedContent !== null
+            ? JSON.stringify(formattedContent, null, 2)
+            : String(formattedContent ?? '');
         }
 
         // Ensure details are visible on new test run
@@ -803,9 +819,9 @@ export const FunctionsManager = {
         detailsBody?.classList.remove('hidden');
 
         if (isSuccess) {
-          Toast.success(`Test başarılı (${res.durationMs}ms)`);
+          Toast.success(`Test başarılı (${statusCode} ${statusText}, ${res.durationMs}ms)`);
         } else {
-          Toast.error(`Test başarısız (${res.statusCode})`);
+          Toast.error(`Test başarısız (${statusCode} ${statusText})`);
         }
       } catch (err) {
         if (resultBox) {
@@ -815,7 +831,7 @@ export const FunctionsManager = {
         if (iconEl) iconEl.textContent = '✖';
         if (titleEl) titleEl.textContent = 'Yürütme işlevi: başarısız';
         if (badgeEl) {
-          badgeEl.textContent = '500 Error';
+          badgeEl.textContent = '500 Internal Server Error';
           badgeEl.className = 'badge badge-not-ready';
         }
         if (durEl) durEl.textContent = '0 ms';

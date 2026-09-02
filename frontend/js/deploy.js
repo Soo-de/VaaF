@@ -2,8 +2,8 @@
  * Deploy flow manager, handling SSE streaming output and console logging.
  */
 
-import { deployFunctionStream } from './api.js?v=3.2';
-import { Toast, escapeHtml } from './utils.js?v=3.2';
+import { deployFunctionStream } from './api.js?v=3.3';
+import { Toast, escapeHtml } from './utils.js?v=3.3';
 
 
 export const DeployManager = {
