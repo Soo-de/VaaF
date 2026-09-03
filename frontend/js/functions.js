@@ -292,6 +292,41 @@ export const FunctionsManager = {
     return `<span class="workspace-fn-icon">&lt;/&gt;</span>`;
   },
 
+  _copyUrlWithCheckmark(url, btn) {
+    if (!url || !url.startsWith('http')) return;
+
+    if (btn) {
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#16a34a" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      `;
+      btn.classList.add('copy-success');
+      setTimeout(() => {
+        btn.innerHTML = origHtml;
+        btn.classList.remove('copy-success');
+      }, 1200);
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).catch(() => {});
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+    } catch {
+      // silent
+    }
+  },
+
   bindListEvents() {
     this.listContainer.querySelectorAll('.fn-list-item').forEach(item => {
       item.addEventListener('click', (e) => {
@@ -305,7 +340,7 @@ export const FunctionsManager = {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const url = btn.getAttribute('data-url');
-        copyToClipboard(url, 'Fonksiyon URL\'i panoya kopyalandı');
+        this._copyUrlWithCheckmark(url, btn);
       });
     });
 
@@ -428,9 +463,13 @@ export const FunctionsManager = {
       this.renderList();
     });
 
-    // Copy URL
-    ws.querySelector('.copy-url-btn')?.addEventListener('click', () => {
-      copyToClipboard(fn.url, 'Fonksiyon URL\'i panoya kopyalandı');
+    // Copy URL (In-place checkmark feedback, zero popup)
+    ws.querySelector('.copy-url-btn')?.addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      const currentFn = this.functionsData.find(f => f.name === fnName) || fn;
+      if (currentFn?.url) {
+        this._copyUrlWithCheckmark(currentFn.url, btn);
+      }
     });
 
     // Main Tab Switcher
@@ -472,38 +511,55 @@ export const FunctionsManager = {
       });
     });
 
-    // Tab-bar refresh button: context-sensitive for ALL tabs
+    // Tab-bar refresh button: context-sensitive with in-place green checkmark feedback
     if (tabRefreshBtn) {
       tabRefreshBtn.addEventListener('click', async () => {
+        if (tabRefreshBtn.disabled) return;
+        tabRefreshBtn.disabled = true;
+
+        const origHtml = tabRefreshBtn.innerHTML;
         const svgIcon = tabRefreshBtn.querySelector('svg');
         svgIcon?.classList.add('spin-anim');
 
         const activeTab = ws.querySelector('.panel-tab-btn.active')?.getAttribute('data-tab');
         const freshFn = this.functionsData.find(f => f.name === fnName) || fn;
 
-        if (activeTab === 'code') {
-          await this.loadFunctions(true);
-          const updatedFn = this.functionsData.find(f => f.name === fnName);
-          if (updatedFn) {
-            const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
-            if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
-            const urlTextEl = ws.querySelector('.url-text');
-            this._updateUrlDisplay(urlTextEl, updatedFn);
+        try {
+          if (activeTab === 'code') {
+            await this.loadFunctions(true);
+            const updatedFn = this.functionsData.find(f => f.name === fnName);
+            if (updatedFn) {
+              const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+              if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
+              const urlTextEl = ws.querySelector('.url-text');
+              this._updateUrlDisplay(urlTextEl, updatedFn);
+            }
+          } else if (activeTab === 'test') {
+            await this.loadFunctions(true);
+          } else if (activeTab === 'revisions') {
+            await this.setupRevisionsTab(freshFn);
+          } else if (activeTab === 'monitor') {
+            this._lastLogContent = '';
+            await this.loadLogs(fnName, 100);
           }
-          Toast.info('Durum güncellendi');
-        } else if (activeTab === 'test') {
-          await this.loadFunctions(true);
-          Toast.info('Test ortamı güncellendi');
-        } else if (activeTab === 'revisions') {
-          await this.setupRevisionsTab(freshFn);
-          Toast.info('Sürümler yenilendi');
-        } else if (activeTab === 'monitor') {
-          this._lastLogContent = '';
-          await this.loadLogs(fnName, 100);
-          Toast.info('Loglar yenilendi');
-        }
 
-        setTimeout(() => svgIcon?.classList.remove('spin-anim'), 400);
+          // In-place Instant Checkmark: zero animation, exact same button size
+          tabRefreshBtn.classList.add('btn-refresh-success');
+          tabRefreshBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span>Yenilendi</span>
+          `;
+        } catch (err) {
+          Toast.error(`Yenileme hatası: ${err.message}`);
+        } finally {
+          setTimeout(() => {
+            tabRefreshBtn.classList.remove('btn-refresh-success');
+            tabRefreshBtn.innerHTML = origHtml;
+            tabRefreshBtn.disabled = false;
+          }, 1200);
+        }
       });
     }
 
@@ -947,12 +1003,6 @@ export const FunctionsManager = {
         // Ensure details are visible on new test run
         toggleBtn?.classList.add('open');
         detailsBody?.classList.remove('hidden');
-
-        if (isSuccess) {
-          Toast.success(`Test başarılı (${badgeLabel}, ${res.durationMs}ms)`);
-        } else {
-          Toast.error(`Test başarısız (${badgeLabel})`);
-        }
       } catch (err) {
         if (resultBox) {
           resultBox.classList.remove('hidden', 'lambda-test-success');
@@ -975,7 +1025,6 @@ export const FunctionsManager = {
 
         toggleBtn?.classList.add('open');
         detailsBody?.classList.remove('hidden');
-        Toast.error(`Test hatası: ${err.message}`);
       } finally {
         testBtn.disabled = false;
         testBtn.innerHTML = defaultBtnHtml;
