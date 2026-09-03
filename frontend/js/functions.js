@@ -17,8 +17,14 @@ import { createEditor, getEditor, disposeEditor } from './editor.js';
 import { DeployManager } from './deploy.js';
 import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey, getHttpStatusText } from './utils.js';
 
+const SIDEBAR_WIDTH_KEY = 'faas-vsc-sidebar-width';
+const SIDEBAR_WIDTH_DEFAULT = 250;
+const SIDEBAR_WIDTH_MIN = 170;
+const SIDEBAR_WIDTH_MAX = 520;
+const EDITOR_MIN_WIDTH = 300;
 
 export const FunctionsManager = {
+  _keydownHandler: null,
   listContainer: null,
   workspaceContainer: null,
   activeFunctionName: null,
@@ -417,7 +423,101 @@ export const FunctionsManager = {
     }
   },
 
+  getSidebarWidth() {
+    try {
+      const stored = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
+      if (Number.isFinite(stored)) {
+        return Math.min(Math.max(stored, SIDEBAR_WIDTH_MIN), SIDEBAR_WIDTH_MAX);
+      }
+    } catch {
+      // Fallback to default
+    }
+    return SIDEBAR_WIDTH_DEFAULT;
+  },
+
+  _removeKeydownHandler() {
+    if (this._keydownHandler) {
+      window.removeEventListener('keydown', this._keydownHandler);
+      this._keydownHandler = null;
+    }
+  },
+
+  activatePanelPane(fn, pane) {
+    const ws = this.workspaceContainer;
+    const panel = ws?.querySelector('.vsc-panel');
+    if (!panel) return;
+
+    panel.classList.remove('collapsed');
+
+    panel.querySelectorAll('.vsc-panel-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.getAttribute('data-pane') === pane);
+    });
+
+    panel.querySelectorAll('.vsc-pane').forEach(p => {
+      p.classList.toggle('hidden', p.getAttribute('data-pane') !== pane);
+    });
+
+    if (pane === 'terminal') {
+      this.loadTerminalLogs(fn.name);
+    }
+  },
+
+  async loadTerminalLogs(fnName) {
+    const ws = this.workspaceContainer;
+    const terminalEl = ws?.querySelector('.workspace-logs-terminal');
+    if (!terminalEl) return;
+
+    terminalEl.innerHTML = '<div class="text-muted" style="font-size: 12px;">Loglar yükleniyor...</div>';
+    try {
+      const logsRes = await getFunctionLogs(fnName);
+      const logs = (logsRes && logsRes.logs) ? logsRes.logs : [];
+      if (logs.length === 0) {
+        terminalEl.innerHTML = '<div class="text-muted" style="font-size: 12px;">Henüz log kaydı bulunamadı.</div>';
+        return;
+      }
+      terminalEl.innerHTML = logs
+        .map(line => `<div class="console-line" style="font-size: 12px; line-height: 1.4;">${escapeHtml(line)}</div>`)
+        .join('');
+      terminalEl.scrollTop = terminalEl.scrollHeight;
+    } catch (err) {
+      terminalEl.innerHTML = `<div class="text-danger" style="font-size: 12px;">Loglar alınamadı: ${escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  updateStatusDeploy(fn) {
+    const ws = this.workspaceContainer;
+    const statusItem = ws?.querySelector('.vsc-status-deploy');
+    if (!statusItem) return;
+
+    if (fn.deploying) {
+      statusItem.className = 'vsc-status-item vsc-status-deploy deploying';
+      statusItem.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" class="spin-anim">
+          <circle cx="12" cy="12" r="9" stroke-dasharray="28" stroke-dashoffset="10"></circle>
+        </svg>
+        <span>Deploying</span>
+      `;
+    } else if (fn.ready || fn.deployed) {
+      statusItem.className = 'vsc-status-item vsc-status-deploy ready';
+      statusItem.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <span>Deployed</span>
+      `;
+    } else {
+      statusItem.className = 'vsc-status-item vsc-status-deploy';
+      statusItem.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9"></circle>
+        </svg>
+        <span>Not Deployed</span>
+      `;
+    }
+  },
+
   closeWorkspace() {
+    this._removeKeydownHandler();
     if (this.workspaceContainer) {
       this.workspaceContainer.classList.add('hidden');
       this.workspaceContainer.innerHTML = '';
@@ -457,6 +557,18 @@ export const FunctionsManager = {
 
     const copyBtn = clone.querySelector('.copy-url-btn');
     if (copyBtn) copyBtn.dataset.url = fn.url;
+
+    // Populate VS Code Shell
+    const shell = clone.querySelector('.vscode-shell');
+    if (shell) {
+      shell.style.setProperty('--vsc-sidebar-width', `${this.getSidebarWidth()}px`);
+    }
+
+    const fnFolderEl = clone.querySelector('.vsc-fn-folder-name');
+    if (fnFolderEl) fnFolderEl.textContent = fnName.toUpperCase();
+
+    const crumbFnEl = clone.querySelector('.vsc-crumb-fn-name');
+    if (crumbFnEl) crumbFnEl.textContent = fnName;
 
     this.workspaceContainer.appendChild(clone);
     this.workspaceContainer.classList.remove('hidden');
@@ -523,7 +635,7 @@ export const FunctionsManager = {
       });
     });
 
-    // Tab-bar refresh button: context-sensitive with in-place green checkmark feedback
+    // Tab-bar refresh button
     if (tabRefreshBtn) {
       tabRefreshBtn.addEventListener('click', async () => {
         if (tabRefreshBtn.disabled) return;
@@ -545,6 +657,7 @@ export const FunctionsManager = {
               if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
               const urlTextEl = ws.querySelector('.url-text');
               this._updateUrlDisplay(urlTextEl, updatedFn);
+              this.updateStatusDeploy(updatedFn);
             }
           } else if (activeTab === 'test') {
             await this.loadFunctions(true);
@@ -555,7 +668,6 @@ export const FunctionsManager = {
             await this.loadLogs(fnName, 100);
           }
 
-          // In-place Instant Checkmark: zero animation, exact same button size
           tabRefreshBtn.classList.add('btn-refresh-success');
           tabRefreshBtn.innerHTML = `
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -575,28 +687,133 @@ export const FunctionsManager = {
       });
     }
 
-    // Subtabs: Editor vs Env
-    const subtabBtns = ws.querySelectorAll('.subtab-btn');
-    const editorPane = ws.querySelector('.subtab-pane[data-pane="editor"]');
-    const envPane = ws.querySelector('.subtab-pane[data-pane="env"]');
-    subtabBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const subtab = btn.getAttribute('data-subtab');
-        subtabBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+    const shell = ws.querySelector('.vscode-shell');
 
-        if (subtab === 'editor') {
-          editorPane?.classList.remove('hidden');
-          editorPane?.classList.add('active');
-          envPane?.classList.add('hidden');
-          envPane?.classList.remove('active');
+    // Sidebar collapsible sections
+    ws.querySelectorAll('.vsc-section-header').forEach(header => {
+      header.addEventListener('click', () => {
+        header.parentElement?.classList.toggle('collapsed');
+      });
+    });
+
+    // Explorer file entry: focuses editor
+    ws.querySelector('.explorer-file-entry')?.addEventListener('click', () => {
+      getEditor(`editor-main-${fnName}`)?.focus();
+    });
+
+    // Tab close toast
+    ws.querySelector('.vsc-tab-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      Toast.info('Bu fonksiyonun tek kod dosyası bulunuyor, kapatılamaz.');
+    });
+
+    // Activity bar actions
+    ws.querySelectorAll('.vsc-activity-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const act = item.getAttribute('data-act');
+
+        if (act === 'explorer') {
+          shell?.classList.toggle('sidebar-hidden');
+          item.classList.toggle('active', !shell?.classList.contains('sidebar-hidden'));
           getEditor(`editor-main-${fnName}`)?.layout();
-        } else {
-          envPane?.classList.remove('hidden');
-          envPane?.classList.add('active');
-          editorPane?.classList.add('hidden');
-          editorPane?.classList.remove('active');
+          return;
         }
+
+        if (act === 'search') {
+          const editor = getEditor(`editor-main-${fnName}`);
+          editor?.focus();
+          editor?.getAction('actions.find')?.run();
+          return;
+        }
+
+        if (act === 'scm') {
+          ws.querySelector('.panel-tab-btn[data-tab="revisions"]')?.click();
+          return;
+        }
+
+        if (act === 'run') {
+          ws.querySelector('.panel-tab-btn[data-tab="test"]')?.click();
+          return;
+        }
+
+        if (act === 'settings') {
+          const envSec = ws.querySelector('.vsc-env-section');
+          envSec?.classList.remove('collapsed');
+          envSec?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      });
+    });
+
+    // Sidebar resize sash & bunny easter egg
+    const sash = ws.querySelector('.vsc-sash');
+    if (sash && shell) {
+      sash.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const shellRect = shell.getBoundingClientRect();
+        const maxWidth = Math.min(
+          SIDEBAR_WIDTH_MAX,
+          Math.max(SIDEBAR_WIDTH_MIN, shellRect.width - 48 - EDITOR_MIN_WIDTH)
+        );
+        const sidebar = ws.querySelector('.vsc-sidebar');
+
+        const onMove = (moveEvent) => {
+          const width = Math.min(
+            Math.max(moveEvent.clientX - shellRect.left - 48, SIDEBAR_WIDTH_MIN),
+            maxWidth
+          );
+          shell.style.setProperty('--vsc-sidebar-width', `${width}px`);
+          sidebar?.classList.toggle('bunny-out', width >= maxWidth);
+          try {
+            localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
+          } catch {
+            // ignore storage errors
+          }
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          sash.classList.remove('dragging');
+          document.body.classList.remove('vsc-resizing');
+          getEditor(`editor-main-${fnName}`)?.layout();
+        };
+
+        sash.classList.add('dragging');
+        document.body.classList.add('vsc-resizing');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    // Panel tabs (Problems / Output / Terminal)
+    ws.querySelectorAll('.vsc-panel-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        this.activatePanelPane(fn, tab.getAttribute('data-pane'));
+      });
+    });
+
+    // Status bar shortcut to Problems pane
+    ws.querySelector('[data-panel-goto="problems"]')?.addEventListener('click', () => {
+      this.activatePanelPane(fn, 'problems');
+    });
+
+    // Panel action buttons (clear, maximize, close)
+    ws.querySelectorAll('[data-panel-act]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const panel = ws.querySelector('.vsc-panel');
+        const action = btn.getAttribute('data-panel-act');
+
+        if (action === 'clear') {
+          const consoleEl = ws.querySelector('.workspace-deploy-console');
+          if (consoleEl) consoleEl.innerHTML = '';
+          const terminalEl = ws.querySelector('.workspace-logs-terminal');
+          if (terminalEl) terminalEl.innerHTML = '';
+        } else if (action === 'maximize') {
+          panel?.classList.toggle('maximized');
+        } else if (action === 'close') {
+          panel?.classList.add('collapsed');
+        }
+        getEditor(`editor-main-${fnName}`)?.layout();
       });
     });
 
@@ -631,38 +848,55 @@ export const FunctionsManager = {
       this.renderEnvRows(fnName);
     });
 
-    // Initialize Monaco Editor
+    // Initialize Monaco Editor with VS Code settings
     const editorContainer = ws.querySelector('.workspace-main-editor');
     if (editorContainer) {
       const editorInstance = await createEditor(editorContainer, {
         id: `editor-main-${fnName}`,
         value: session.code,
-        language: 'python'
+        language: 'python',
+        minimap: true,
+        fontSize: 14,
+        lineHeight: 20,
+        renderLineHighlight: 'line',
+        padding: { top: 6, bottom: 6 }
       });
+
       editorInstance?.onDidChangeModelContent(() => {
         session.code = editorInstance.getValue();
       });
+
+      const cursorEl = ws.querySelector('.vsc-status-cursor');
+      if (cursorEl && editorInstance) {
+        const updateCursor = () => {
+          const pos = editorInstance.getPosition();
+          if (pos) cursorEl.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
+        };
+        editorInstance.onDidChangeCursorPosition(updateCursor);
+        updateCursor();
+      }
     }
 
-    // Run Code button (SSE Real-Time Stream)
+    // Initial status bar deploy indicator
+    this.updateStatusDeploy(fn);
+
+    // Run Code button (Test)
     const runBtn = ws.querySelector('.btn-run-code');
     runBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
       const latestCode = editorInstance ? editorInstance.getValue() : session.code;
-      const consoleWrapper = ws.querySelector('.ide-output-container');
-      const consoleBody = consoleWrapper?.querySelector('.console-body') || consoleWrapper;
+      const consoleBody = ws.querySelector('.workspace-deploy-console');
 
+      this.activatePanelPane(fn, 'output');
       if (!consoleBody) return;
-      consoleWrapper?.classList.remove('hidden');
 
-      // Record activity so tested function jumps to the top
       this.recordActivity(fnName);
       this.sortFunctions();
       this.renderList();
 
       const origHtml = runBtn.innerHTML;
       runBtn.disabled = true;
-      runBtn.innerHTML = `<span class="spinner"></span><span>Çalıştırılıyor...</span>`;
+      runBtn.innerHTML = `<span class="spinner"></span><span>Çalışıyor...</span>`;
 
       consoleBody.innerHTML = '';
       const ts = () => new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -684,7 +918,7 @@ export const FunctionsManager = {
             try {
               const parsed = JSON.parse(data);
               addLine('console-line-step', `<span class="console-ts">[${ts()}]</span> <strong class="console-step">Return Değeri:</strong>`);
-              addLine('console-line-log', `<pre style="margin:0.25rem 0;padding:0.5rem;background:rgba(255,255,255,0.03);border-radius:4px;border:1px solid var(--border-color);">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`);
+              addLine('console-line-log', `<pre class="console-output-pre">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`);
             } catch {
               addLine('console-line-log', `<span class="console-ts">[${ts()}]</span> <span>Return: ${escapeHtml(data)}</span>`);
             }
@@ -706,7 +940,7 @@ export const FunctionsManager = {
       const editorInstance = getEditor(`editor-main-${fnName}`);
       const latestCode = editorInstance ? editorInstance.getValue() : session.code;
 
-      const envRows = ws.querySelectorAll('.env-row');
+      const envRows = ws.querySelectorAll('.vsc-env-list .env-row');
       const envObj = {};
       let hasEnvError = false;
 
@@ -742,9 +976,11 @@ export const FunctionsManager = {
         this.renderList();
         const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
         if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+        this.updateStatusDeploy(currentFn);
       }
 
-      const consoleWrapper = ws.querySelector('.ide-output-container');
+      this.activatePanelPane(fn, 'output');
+      const consoleWrapper = ws.querySelector('.vsc-panel');
 
       await DeployManager.runDeploy({
         functionName: fnName,
@@ -770,6 +1006,7 @@ export const FunctionsManager = {
             if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
             const urlTextEl = ws.querySelector('.url-text');
             this._updateUrlDisplay(urlTextEl, updatedFn);
+            this.updateStatusDeploy(updatedFn);
           }
 
           this.refreshActiveRevisions();
@@ -780,12 +1017,26 @@ export const FunctionsManager = {
             this.renderList();
             const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
             if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+            this.updateStatusDeploy(currentFn);
           }
           this.loadFunctions(true);
           this.refreshActiveRevisions();
         }
       });
     });
+
+    // Global keyboard shortcuts (⇧⌘U / Ctrl+Shift+U -> Deploy, ⇧⌘I / Ctrl+Shift+I -> Test)
+    this._removeKeydownHandler();
+    this._keydownHandler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'u' || e.key === 'U')) {
+        e.preventDefault();
+        ws.querySelector('.btn-deploy')?.click();
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault();
+        ws.querySelector('.btn-run-code')?.click();
+      }
+    };
+    window.addEventListener('keydown', this._keydownHandler);
   },
 
   renderEnvRows(fnName) {
@@ -796,7 +1047,7 @@ export const FunctionsManager = {
     const session = this.getSession(fnName);
     const envMap = session.envMap;
     if (envMap.size === 0) {
-      container.innerHTML = `<div class="text-muted p-2">Henüz ortam değişkeni tanımlanmadı.</div>`;
+      container.innerHTML = `<div class="vsc-env-empty">Henüz ortam değişkeni yapılandırılmadı.</div>`;
       return;
     }
 
@@ -807,16 +1058,12 @@ export const FunctionsManager = {
       const invalidClass = (k && !isValid) ? ' input-invalid' : '';
       const errorText = (k && !isValid) ? (error || '') : '';
       rows += `
-        <div class="env-row" data-index="${idx}" style="align-items: flex-start; margin-bottom: 10px;">
-          <div class="env-key-col" style="flex: 1; display: flex; flex-direction: column;">
-            <input type="text" class="input env-key-input${invalidClass}" placeholder="ANAHTAR (örn: API_KEY)" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
-            <span class="env-key-error text-danger" style="font-size: 11px; color: #f87171; min-height: 14px; margin-top: 3px;">${escapeHtml(errorText)}</span>
-          </div>
-          <div class="env-val-col" style="flex: 1; display: flex; flex-direction: column;">
-            <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
-          </div>
-          <button class="icon-btn delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil" style="margin-top: 6px;">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        <div class="env-row" data-index="${idx}">
+          <input type="text" class="input env-key-input${invalidClass}" placeholder="ANAHTAR (örn: API_KEY)" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
+          <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
+          ${errorText ? `<span class="env-key-error text-danger" style="font-size: 11px; line-height: 1.2;">${escapeHtml(errorText)}</span>` : ''}
+          <button class="delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
       `;

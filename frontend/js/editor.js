@@ -107,17 +107,17 @@ export async function createEditor(container, options = {}) {
     value: options.value ?? '',
     language: options.language || 'python',
     theme: monacoTheme,
-    minimap: { enabled: options.minimap ?? false },
-    fontSize: options.fontSize || 15.5,
-    lineHeight: 22,
-    fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace",
+    minimap: { enabled: Boolean(options.minimap) },
+    fontSize: options.fontSize || 14,
+    lineHeight: options.lineHeight || 20,
+    fontFamily: options.fontFamily || "'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace",
     lineNumbers: options.lineNumbers !== undefined ? options.lineNumbers : 'on',
     scrollBeyondLastLine: false,
     automaticLayout: true,
     tabSize: 4,
     readOnly: options.readOnly ?? false,
-    renderLineHighlight: 'all',
-    padding: { top: 14, bottom: 14 }
+    renderLineHighlight: options.renderLineHighlight || 'line',
+    padding: options.padding || { top: 6, bottom: 6 }
   });
 
   editorInstances.set(editorId, editor);
