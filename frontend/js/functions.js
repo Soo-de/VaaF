@@ -10,7 +10,8 @@ import {
   rollbackRevision,
   deleteFunction,
   getFunctionLogs,
-  proxyRequest
+  proxyRequest,
+  runCodeStream
 } from './api.js';
 import { createEditor, getEditor, disposeEditor } from './editor.js';
 import { DeployManager } from './deploy.js';
@@ -26,9 +27,60 @@ export const FunctionsManager = {
   testBodyState: new Map(),
   searchQuery: '',
   searchBound: false,
+  _lastLogContent: '',
+  _lastLogFnName: '',
 
   // In-memory Session Cache per function (RAM / Zero storage footprint)
   sessionCache: new Map(),
+
+  getActivityMap() {
+    try {
+      const raw = localStorage.getItem('faas_activity_map');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  },
+
+  recordActivity(name) {
+    if (!name) return;
+    try {
+      const map = this.getActivityMap();
+      map[name] = Date.now();
+      localStorage.setItem('faas_activity_map', JSON.stringify(map));
+    } catch {}
+  },
+
+  deleteActivity(name) {
+    if (!name) return;
+    try {
+      const map = this.getActivityMap();
+      delete map[name];
+      localStorage.setItem('faas_activity_map', JSON.stringify(map));
+    } catch {}
+  },
+
+  sortFunctions() {
+    const activityMap = this.getActivityMap();
+    this.functionsData.sort((a, b) => {
+      const actA = activityMap[a.name] || 0;
+      const actB = activityMap[b.name] || 0;
+
+      const timeA = Math.max(
+        actA,
+        a.updated_at ? new Date(a.updated_at).getTime() : 0,
+        a.created_at ? new Date(a.created_at).getTime() : 0
+      );
+      const timeB = Math.max(
+        actB,
+        b.updated_at ? new Date(b.updated_at).getTime() : 0,
+        b.created_at ? new Date(b.created_at).getTime() : 0
+      );
+
+      if (timeA !== timeB) return timeB - timeA;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  },
 
   getSession(fnName) {
     if (!this.sessionCache.has(fnName)) {
@@ -84,15 +136,10 @@ export const FunctionsManager = {
       const data = await getFunctions();
       const rawFunctions = (data && Array.isArray(data.functions)) ? data.functions : [];
 
-      // Filter valid items and sort: most recently deployed/updated first
+      // Filter valid items and sort: most recently tested/deployed/updated first
       this.functionsData = rawFunctions
-        .filter(f => f && typeof f.name === 'string' && f.name.length > 0)
-        .sort((a, b) => {
-          const da = a.updated_at ? new Date(a.updated_at).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
-          const db = b.updated_at ? new Date(b.updated_at).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
-          if (da !== db) return db - da;
-          return (a.name || '').localeCompare(b.name || '');
-        });
+        .filter(f => f && typeof f.name === 'string' && f.name.length > 0);
+      this.sortFunctions();
 
       // Update count badge
       const countBadge = document.getElementById('functions-count-badge');
@@ -245,12 +292,47 @@ export const FunctionsManager = {
     return `<span class="workspace-fn-icon">&lt;/&gt;</span>`;
   },
 
+  _copyUrlWithCheckmark(url, btn) {
+    if (!url || !url.startsWith('http')) return;
+
+    if (btn) {
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#16a34a" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      `;
+      btn.classList.add('copy-success');
+      setTimeout(() => {
+        btn.innerHTML = origHtml;
+        btn.classList.remove('copy-success');
+      }, 1200);
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).catch(() => {});
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+    } catch {
+      // silent
+    }
+  },
+
   bindListEvents() {
     this.listContainer.querySelectorAll('.fn-list-item').forEach(item => {
       item.addEventListener('click', (e) => {
         if (e.target.closest('.copy-url-btn') || e.target.closest('.delete-btn')) return;
         const name = item.getAttribute('data-name');
-        this.selectFunction(name);
+        this.selectFunction(name, true);
       });
     });
 
@@ -258,7 +340,7 @@ export const FunctionsManager = {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const url = btn.getAttribute('data-url');
-        copyToClipboard(url, 'Fonksiyon URL\'i panoya kopyalandı');
+        this._copyUrlWithCheckmark(url, btn);
       });
     });
 
@@ -277,6 +359,7 @@ export const FunctionsManager = {
           try {
             await deleteFunction(name);
             this.sessionCache.delete(name);
+            this.deleteActivity(name);
             Toast.success(`'${name}' başarıyla silindi.`);
 
             const wasActive = this.activeFunctionName === name;
@@ -306,8 +389,9 @@ export const FunctionsManager = {
   /**
    * Select a function and show its spacious workspace.
    * @param {string} name
+   * @param {boolean} [shouldScroll=false] - Only scroll into view if user explicitly clicked/created
    */
-  async selectFunction(name) {
+  async selectFunction(name, shouldScroll = false) {
     if (this.activeFunctionName && this.activeFunctionName !== name) {
       disposeEditor(`editor-main-${this.activeFunctionName}`);
       disposeEditor(`editor-test-req-${this.activeFunctionName}`);
@@ -319,7 +403,18 @@ export const FunctionsManager = {
     if (!fn || !this.workspaceContainer) return;
 
     this.workspaceContainer.classList.remove('hidden');
-    this.renderWorkspace(fn);
+    await this.renderWorkspace(fn);
+
+    if (shouldScroll) {
+      setTimeout(() => {
+        this.workspaceContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        getEditor(`editor-main-${name}`)?.layout();
+      }, 120);
+    } else {
+      setTimeout(() => {
+        getEditor(`editor-main-${name}`)?.layout();
+      }, 100);
+    }
   },
 
   closeWorkspace() {
@@ -358,18 +453,7 @@ export const FunctionsManager = {
     if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(fn);
 
     const urlTextEl = clone.querySelector('.url-text');
-    if (urlTextEl) {
-      urlTextEl.textContent = fn.url || 'Not Deployed';
-      if (fn.url && fn.url !== 'Not Deployed' && fn.url !== 'Henüz Deploy Edilmedi' && fn.url.startsWith('http')) {
-        urlTextEl.href = fn.url;
-        urlTextEl.title = `Yeni sekmede aç: ${fn.url}`;
-        urlTextEl.classList.remove('url-disabled');
-      } else {
-        urlTextEl.removeAttribute('href');
-        urlTextEl.title = 'Henüz deploy edilmedi';
-        urlTextEl.classList.add('url-disabled');
-      }
-    }
+    this._updateUrlDisplay(urlTextEl, fn);
 
     const copyBtn = clone.querySelector('.copy-url-btn');
     if (copyBtn) copyBtn.dataset.url = fn.url;
@@ -391,9 +475,13 @@ export const FunctionsManager = {
       this.renderList();
     });
 
-    // Copy URL
-    ws.querySelector('.copy-url-btn')?.addEventListener('click', () => {
-      copyToClipboard(fn.url, 'Fonksiyon URL\'i panoya kopyalandı');
+    // Copy URL (In-place checkmark feedback, zero popup)
+    ws.querySelector('.copy-url-btn')?.addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      const currentFn = this.functionsData.find(f => f.name === fnName) || fn;
+      if (currentFn?.url) {
+        this._copyUrlWithCheckmark(currentFn.url, btn);
+      }
     });
 
     // Main Tab Switcher
@@ -401,14 +489,8 @@ export const FunctionsManager = {
     const tabPanes = ws.querySelectorAll('.panel-tab-content');
     const tabRefreshBtn = ws.querySelector('.btn-tab-refresh');
 
-    const updateRefreshVisibility = (tab) => {
-      if (tabRefreshBtn) {
-        if (tab === 'revisions' || tab === 'monitor') {
-          tabRefreshBtn.classList.remove('hidden');
-        } else {
-          tabRefreshBtn.classList.add('hidden');
-        }
-      }
+    const updateRefreshVisibility = () => {
+      if (tabRefreshBtn) tabRefreshBtn.classList.remove('hidden');
     };
 
     tabBtns.forEach(btn => {
@@ -441,22 +523,55 @@ export const FunctionsManager = {
       });
     });
 
-    // Tab-bar refresh button: context-sensitive
+    // Tab-bar refresh button: context-sensitive with in-place green checkmark feedback
     if (tabRefreshBtn) {
       tabRefreshBtn.addEventListener('click', async () => {
+        if (tabRefreshBtn.disabled) return;
+        tabRefreshBtn.disabled = true;
+
+        const origHtml = tabRefreshBtn.innerHTML;
         const svgIcon = tabRefreshBtn.querySelector('svg');
         svgIcon?.classList.add('spin-anim');
 
         const activeTab = ws.querySelector('.panel-tab-btn.active')?.getAttribute('data-tab');
-        if (activeTab === 'revisions') {
-          await this.setupRevisionsTab(fn);
-          Toast.info('Sürümler yenilendi');
-        } else if (activeTab === 'monitor') {
-          await this.loadLogs(fnName, 100);
-          Toast.info('Loglar yenilendi');
-        }
+        const freshFn = this.functionsData.find(f => f.name === fnName) || fn;
 
-        setTimeout(() => svgIcon?.classList.remove('spin-anim'), 400);
+        try {
+          if (activeTab === 'code') {
+            await this.loadFunctions(true);
+            const updatedFn = this.functionsData.find(f => f.name === fnName);
+            if (updatedFn) {
+              const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+              if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
+              const urlTextEl = ws.querySelector('.url-text');
+              this._updateUrlDisplay(urlTextEl, updatedFn);
+            }
+          } else if (activeTab === 'test') {
+            await this.loadFunctions(true);
+          } else if (activeTab === 'revisions') {
+            await this.setupRevisionsTab(freshFn);
+          } else if (activeTab === 'monitor') {
+            this._lastLogContent = '';
+            await this.loadLogs(fnName, 100);
+          }
+
+          // In-place Instant Checkmark: zero animation, exact same button size
+          tabRefreshBtn.classList.add('btn-refresh-success');
+          tabRefreshBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span>Yenilendi</span>
+          `;
+        } catch (err) {
+          Toast.error(`Yenileme hatası: ${err.message}`);
+        } finally {
+          setTimeout(() => {
+            tabRefreshBtn.classList.remove('btn-refresh-success');
+            tabRefreshBtn.innerHTML = origHtml;
+            tabRefreshBtn.disabled = false;
+          }, 1200);
+        }
       });
     }
 
@@ -529,13 +644,68 @@ export const FunctionsManager = {
       });
     }
 
+    // Run Code button (SSE Real-Time Stream)
+    const runBtn = ws.querySelector('.btn-run-code');
+    runBtn?.addEventListener('click', async () => {
+      const editorInstance = getEditor(`editor-main-${fnName}`);
+      const latestCode = editorInstance ? editorInstance.getValue() : session.code;
+      const consoleWrapper = ws.querySelector('.ide-output-container');
+      const consoleBody = consoleWrapper?.querySelector('.console-body') || consoleWrapper;
+
+      if (!consoleBody) return;
+      consoleWrapper?.classList.remove('hidden');
+
+      // Record activity so tested function jumps to the top
+      this.recordActivity(fnName);
+      this.sortFunctions();
+      this.renderList();
+
+      const origHtml = runBtn.innerHTML;
+      runBtn.disabled = true;
+      runBtn.innerHTML = `<span class="spinner"></span><span>Çalıştırılıyor...</span>`;
+
+      consoleBody.innerHTML = '';
+      const ts = () => new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const addLine = (cls, html) => {
+        const el = document.createElement('div');
+        el.className = `console-line ${cls}`;
+        el.innerHTML = html;
+        consoleBody.appendChild(el);
+        consoleBody.scrollTop = consoleBody.scrollHeight;
+      };
+
+      try {
+        await runCodeStream(latestCode, { key1: 'value1' }, {}, (eventType, data) => {
+          if (eventType === 'step') {
+            addLine('console-line-step', `<span class="console-ts">[${ts()}]</span> <strong class="console-step">${escapeHtml(data)}</strong>`);
+          } else if (eventType === 'log') {
+            addLine('console-line-log', `<span class="console-ts">[${ts()}]</span> <span>${escapeHtml(data)}</span>`);
+          } else if (eventType === 'result') {
+            try {
+              const parsed = JSON.parse(data);
+              addLine('console-line-step', `<span class="console-ts">[${ts()}]</span> <strong class="console-step">Return Değeri:</strong>`);
+              addLine('console-line-log', `<pre style="margin:0.25rem 0;padding:0.5rem;background:rgba(255,255,255,0.03);border-radius:4px;border:1px solid var(--border-color);">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`);
+            } catch {
+              addLine('console-line-log', `<span class="console-ts">[${ts()}]</span> <span>Return: ${escapeHtml(data)}</span>`);
+            }
+          } else if (eventType === 'error') {
+            addLine('console-line-error', `<span class="console-ts">[${ts()}]</span> <span class="console-error">❌ ${escapeHtml(data)}</span>`);
+          }
+        });
+      } catch (err) {
+        addLine('console-line-error', `<span class="console-ts">[${ts()}]</span> <span class="console-error">❌ ${escapeHtml(err.message)}</span>`);
+      } finally {
+        runBtn.disabled = false;
+        runBtn.innerHTML = origHtml;
+      }
+    });
+
     // Deploy button
     const deployBtn = ws.querySelector('.btn-deploy');
     deployBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
       const latestCode = editorInstance ? editorInstance.getValue() : session.code;
 
-      // Directly validate and collect from current DOM inputs in Environment pane
       const envRows = ws.querySelectorAll('.env-row');
       const envObj = {};
       let hasEnvError = false;
@@ -562,15 +732,11 @@ export const FunctionsManager = {
         }
       });
 
-      if (hasEnvError) {
-        return; // Abort deploy if any key is invalid!
-      }
+      if (hasEnvError) return;
 
-      // Determine isUpdate: true only if already deployed before (ready/deployed)
       const currentFn = this.functionsData.find(f => f.name === fnName);
       const isUpdate = Boolean(currentFn && (currentFn.ready || currentFn.deployed || (currentFn.revisions && currentFn.revisions.length > 0)));
 
-      // Set deploying visual state immediately (in list and workspace header)
       if (currentFn) {
         currentFn.deploying = true;
         this.renderList();
@@ -578,7 +744,6 @@ export const FunctionsManager = {
         if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
       }
 
-      // Format console container wrapper for DeployManager
       const consoleWrapper = ws.querySelector('.ide-output-container');
 
       await DeployManager.runDeploy({
@@ -588,20 +753,30 @@ export const FunctionsManager = {
         envVars: envObj,
         consoleElement: consoleWrapper,
         deployBtn,
-        onComplete: () => {
+        onComplete: async () => {
           if (currentFn) {
             currentFn.deploying = false;
             currentFn.ready = true;
             currentFn.deployed = true;
           }
           session.code = latestCode;
-          this.loadFunctions(true);
+
+          this.recordActivity(fnName);
+          await this.loadFunctions(true);
+
+          const updatedFn = this.functionsData.find(f => f.name === fnName);
+          if (updatedFn) {
+            const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+            if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
+            const urlTextEl = ws.querySelector('.url-text');
+            this._updateUrlDisplay(urlTextEl, updatedFn);
+          }
+
           this.refreshActiveRevisions();
         },
         onError: () => {
           if (currentFn) {
             currentFn.deploying = false;
-            // Preserve deployed state when function has existing ready revisions
             this.renderList();
             const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
             if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
@@ -727,31 +902,42 @@ export const FunctionsManager = {
     }
 
     const testBtn = ws.querySelector('.btn-run-test');
-    if (!testBtn || testBtn.dataset.bound === 'true') {
-      return;
-    }
-    testBtn.dataset.bound = 'true';
-
-    // Toggle details button
     const toggleBtn = ws.querySelector('.lambda-toggle-btn');
     const detailsBody = ws.querySelector('.lambda-details-body');
-    toggleBtn?.addEventListener('click', () => {
-      const isOpen = toggleBtn.classList.contains('open');
-      if (isOpen) {
-        toggleBtn.classList.remove('open');
-        detailsBody?.classList.add('hidden');
-      } else {
-        toggleBtn.classList.add('open');
-        detailsBody?.classList.remove('hidden');
-      }
-    });
 
-    // Test button
-    testBtn.addEventListener('click', async () => {
+    // Deterministic toggle for Ayrıntılar button
+    if (toggleBtn && detailsBody) {
+      toggleBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isHidden = detailsBody.classList.contains('hidden');
+        if (isHidden) {
+          detailsBody.classList.remove('hidden');
+          toggleBtn.classList.add('open');
+        } else {
+          detailsBody.classList.add('hidden');
+          toggleBtn.classList.remove('open');
+        }
+      };
+    }
+
+    if (!testBtn) return;
+
+    // Test execution handler
+    testBtn.onclick = async () => {
       if (testBtn.disabled) return;
 
-      if (!fn.deployed && !fn.ready) {
+      const currentFn = this.functionsData.find(f => f.name === fnName) || fn;
+      const isDeployed = Boolean(currentFn && (currentFn.deployed || currentFn.ready || (currentFn.revisions && currentFn.revisions.length > 0)));
+
+      if (!isDeployed) {
         Toast.info("Fonksiyon henüz cluster'a deploy edilmedi. Lütfen önce Kod sekmesinden 'Deploy' butonuna basın.");
+        return;
+      }
+
+      const targetUrl = currentFn.url;
+      if (!targetUrl || !targetUrl.startsWith('http')) {
+        Toast.error("Fonksiyon canlı URL'i henüz hazır değil. Lütfen birkaç saniye sonra tekrar deneyin veya Yenile butonuna basın.");
         return;
       }
 
@@ -764,6 +950,11 @@ export const FunctionsManager = {
         return;
       }
 
+      // Record activity so tested function jumps to the top
+      this.recordActivity(fnName);
+      this.sortFunctions();
+      this.renderList();
+
       const defaultBtnHtml = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>Test Et</span>`;
       testBtn.disabled = true;
       testBtn.innerHTML = `<span class="spinner"></span> <span>İstek Gönderiliyor...</span>`;
@@ -771,13 +962,14 @@ export const FunctionsManager = {
       const resultBox = ws.querySelector('.lambda-result-box');
       const iconEl = ws.querySelector('.lambda-status-icon');
       const titleEl = ws.querySelector('.lambda-status-title');
+      const headerBadgeEl = ws.querySelector('.lambda-header-badge');
       const badgeEl = ws.querySelector('.lambda-status-badge');
       const durEl = ws.querySelector('.lambda-duration-tag');
       const bodyPre = ws.querySelector('.lambda-response-pre');
 
       try {
         const res = await proxyRequest({
-          url: fn.url,
+          url: targetUrl,
           method: 'POST',
           body: reqBody
         });
@@ -785,6 +977,7 @@ export const FunctionsManager = {
         const statusCode = Number(res.statusCode) || 200;
         const isSuccess = statusCode >= 200 && statusCode < 300;
         const statusText = getHttpStatusText(statusCode);
+        const badgeLabel = `${statusCode} ${statusText}`;
 
         if (resultBox) {
           resultBox.classList.remove('hidden', 'lambda-test-success', 'lambda-test-fail');
@@ -793,9 +986,14 @@ export const FunctionsManager = {
 
         if (iconEl) iconEl.textContent = isSuccess ? '✔' : '✖';
         if (titleEl) titleEl.textContent = isSuccess ? 'Yürütme işlevi: başarılı' : 'Yürütme işlevi: başarısız';
+        
+        if (headerBadgeEl) {
+          headerBadgeEl.textContent = badgeLabel;
+          headerBadgeEl.className = `badge lambda-header-badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
+        }
         if (badgeEl) {
-          badgeEl.textContent = `${statusCode} ${statusText}`;
-          badgeEl.className = `badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
+          badgeEl.textContent = badgeLabel;
+          badgeEl.className = `badge lambda-status-badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
         }
         if (durEl) durEl.textContent = `${res.durationMs || 0} ms`;
 
@@ -817,12 +1015,6 @@ export const FunctionsManager = {
         // Ensure details are visible on new test run
         toggleBtn?.classList.add('open');
         detailsBody?.classList.remove('hidden');
-
-        if (isSuccess) {
-          Toast.success(`Test başarılı (${statusCode} ${statusText}, ${res.durationMs}ms)`);
-        } else {
-          Toast.error(`Test başarısız (${statusCode} ${statusText})`);
-        }
       } catch (err) {
         if (resultBox) {
           resultBox.classList.remove('hidden', 'lambda-test-success');
@@ -830,9 +1022,13 @@ export const FunctionsManager = {
         }
         if (iconEl) iconEl.textContent = '✖';
         if (titleEl) titleEl.textContent = 'Yürütme işlevi: başarısız';
+        if (headerBadgeEl) {
+          headerBadgeEl.textContent = '500 Internal Server Error';
+          headerBadgeEl.className = 'badge lambda-header-badge badge-not-ready';
+        }
         if (badgeEl) {
           badgeEl.textContent = '500 Internal Server Error';
-          badgeEl.className = 'badge badge-not-ready';
+          badgeEl.className = 'badge lambda-status-badge badge-not-ready';
         }
         if (durEl) durEl.textContent = '0 ms';
         if (bodyPre) {
@@ -841,12 +1037,11 @@ export const FunctionsManager = {
 
         toggleBtn?.classList.add('open');
         detailsBody?.classList.remove('hidden');
-        Toast.error(`Test hatası: ${err.message}`);
       } finally {
         testBtn.disabled = false;
         testBtn.innerHTML = defaultBtnHtml;
       }
-    });
+    };
   },
 
   async setupMonitorTab(fn) {
@@ -881,11 +1076,21 @@ export const FunctionsManager = {
     const logsTerminal = ws?.querySelector('.logs-terminal');
     if (!logsTerminal) return;
 
-    logsTerminal.innerHTML = `<div class="text-muted" style="text-align: center; padding: 2rem;">Loglar yükleniyor...</div>`;
+    if (!this._lastLogContent || this._lastLogFnName !== fnName) {
+      logsTerminal.innerHTML = `<div class="text-muted" style="text-align: center; padding: 2rem;">Loglar yükleniyor...</div>`;
+    }
 
     try {
       const data = await getFunctionLogs(fnName, tail);
       const logs = data.logs || [];
+      const newContent = logs.join('\n');
+
+      if (newContent === this._lastLogContent && this._lastLogFnName === fnName) {
+        return;
+      }
+      this._lastLogContent = newContent;
+      this._lastLogFnName = fnName;
+
       if (logs.length === 0) {
         logsTerminal.innerHTML = `
           <div class="empty-state tab-empty-state">
@@ -922,22 +1127,39 @@ export const FunctionsManager = {
     const revisionsContainer = ws?.querySelector('.revisions-wrapper');
     if (!revisionsContainer) return;
 
+    const renderEmptyState = () => {
+      revisionsContainer.innerHTML = `
+        <div class="empty-state tab-empty-state">
+          <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+          <h4 class="empty-state-title">Henüz Sürüm Geçmişi Yok</h4>
+          <p class="text-muted">Bu fonksiyona ait dağıtılmış geçmiş bir revizyon kaydı bulunmuyor. Kod sekmesinden yeni bir dağıtım (deploy) başlatabilirsiniz.</p>
+        </div>
+      `;
+    };
+
+    if (fn.isDraft || !fn.url || fn.url === 'Henüz Deploy Edilmedi') {
+      renderEmptyState();
+      return;
+    }
+
+    // Show centered loading spinner while fetching
+    revisionsContainer.innerHTML = `
+      <div class="tab-loading-state">
+        <div class="tab-loading-spinner"></div>
+        <span>Sürümler yükleniyor...</span>
+      </div>
+    `;
+
     try {
       const res = await getFunctionRevisions(fnName);
       const revisions = res.revisions || [];
 
       if (revisions.length === 0) {
-        revisionsContainer.innerHTML = `
-          <div class="empty-state tab-empty-state">
-            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-              <polyline points="2 17 12 22 22 17"></polyline>
-              <polyline points="2 12 12 17 22 12"></polyline>
-            </svg>
-            <h4 class="empty-state-title">Henüz Sürüm Geçmişi Yok</h4>
-            <p class="text-muted">Bu fonksiyona ait dağıtılmış geçmiş bir revizyon kaydı bulunmuyor. Kod sekmesinden yeni bir dağıtım (deploy) başlatabilirsiniz.</p>
-          </div>
-        `;
+        renderEmptyState();
         return;
       }
 
@@ -1061,6 +1283,24 @@ export const FunctionsManager = {
       });
     } catch (err) {
       revisionsContainer.innerHTML = `<div class="text-danger p-3">Sürümler yüklenemedi: ${escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  _updateUrlDisplay(urlTextEl, fn) {
+    if (!urlTextEl) return;
+    const isDeployed = fn.deployed || fn.ready;
+    const hasUrl = fn.url && fn.url.startsWith('http');
+
+    if (isDeployed && hasUrl) {
+      urlTextEl.textContent = fn.url;
+      urlTextEl.href = fn.url;
+      urlTextEl.title = `Yeni sekmede aç: ${fn.url}`;
+      urlTextEl.classList.remove('url-disabled');
+    } else {
+      urlTextEl.textContent = 'Henüz Deploy Edilmedi';
+      urlTextEl.removeAttribute('href');
+      urlTextEl.title = 'Fonksiyon henüz cluster\'a deploy edilmedi';
+      urlTextEl.classList.add('url-disabled');
     }
   }
 };

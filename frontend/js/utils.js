@@ -21,8 +21,14 @@ export const Toast = {
    * @param {'success'|'error'|'warning'|'info'} [type='info'] - Toast style type
    * @param {number} [duration=4000] - Duration in ms before auto-dismiss
    */
-  show(message, type = 'info', duration = 4000) {
+  show(message, type = 'info', duration = 2500) {
     this.init();
+
+    const cleanMsg = String(message || '').trim();
+    if (!cleanMsg) return;
+
+    // Single Toast Policy: remove any existing toast so they NEVER stack down the screen!
+    this.container.innerHTML = '';
 
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
@@ -152,17 +158,20 @@ export const Modal = {
 };
 
 /**
- * Copies text to clipboard and triggers a toast.
+ * Copies text to clipboard with optional in-place checkmark feedback on the button (zero popups).
  * @param {string} text
- * @param {string} [successMsg='Panoya kopyalandı!']
+ * @param {HTMLElement} [targetBtn=null]
  */
-export async function copyToClipboard(text, successMsg = 'Panoya kopyalandı!') {
+export async function copyToClipboard(text, targetBtn = null) {
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return;
+
   try {
     if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(cleanText);
     } else {
       const textarea = document.createElement('textarea');
-      textarea.value = text;
+      textarea.value = cleanText;
       textarea.style.position = 'fixed';
       textarea.style.opacity = '0';
       document.body.appendChild(textarea);
@@ -170,7 +179,24 @@ export async function copyToClipboard(text, successMsg = 'Panoya kopyalandı!') 
       document.execCommand('copy');
       document.body.removeChild(textarea);
     }
-    Toast.success(successMsg);
+
+    const btn = (targetBtn && targetBtn.nodeType === Node.ELEMENT_NODE)
+      ? targetBtn
+      : null;
+
+    if (btn) {
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#10b981" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      `;
+      btn.classList.add('copy-success');
+      setTimeout(() => {
+        btn.innerHTML = origHtml;
+        btn.classList.remove('copy-success');
+      }, 1200);
+    }
   } catch (err) {
     Toast.error('Kopyalama başarısız oldu.');
   }

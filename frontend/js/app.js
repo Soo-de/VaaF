@@ -16,6 +16,12 @@ class App {
 
 
   async init() {
+    // Start page at the top on initial load/refresh
+    if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+    }
+    window.scrollTo(0, 0);
+
     // 1. Initialize theme
     ThemeManager.init();
 
@@ -119,9 +125,12 @@ class App {
         nameInput.classList.remove('input-valid');
         if (validationHint) validationHint.textContent = '';
 
-        // Reload data from store and select the new function
+        // Record activity so newly created function is top-most
+        FunctionsManager.recordActivity(functionName);
+
+        // Reload data from store and select the new function with smooth scroll
         await FunctionsManager.loadFunctions(true);
-        FunctionsManager.selectFunction(functionName);
+        FunctionsManager.selectFunction(functionName, true);
       } catch (err) {
         Toast.error(err.message || 'Fonksiyon oluşturulamadı.');
       }

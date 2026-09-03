@@ -25,7 +25,7 @@ from config import (
     TENANT_NAMESPACE,
     logger,
 )
-from routers import deploy, functions, health, jobs, logs, proxy
+from routers import deploy, functions, health, jobs, logs, proxy, run
 
 
 # ── Application Lifespan ──────────────────────────────────────────────────────
@@ -71,6 +71,7 @@ app.include_router(functions.router)
 app.include_router(logs.router)
 app.include_router(jobs.router)
 app.include_router(proxy.router)
+app.include_router(run.router)
 
 # ── Static Frontend Assets ────────────────────────────────────────────────────
 # Mounted at root after API routers so /health, /deploy etc. take priority
