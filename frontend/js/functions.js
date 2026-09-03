@@ -18,13 +18,19 @@ import { DeployManager } from './deploy.js';
 import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey, getHttpStatusText } from './utils.js';
 
 const SIDEBAR_WIDTH_KEY = 'faas-vsc-sidebar-width';
+const SIDEBAR_COLLAPSED_KEY = 'faas-vsc-sidebar-collapsed';
+const PANEL_HEIGHT_KEY = 'faas-vsc-panel-height';
+const PANEL_COLLAPSED_KEY = 'faas-vsc-panel-collapsed';
 const SIDEBAR_WIDTH_DEFAULT = 250;
 const SIDEBAR_WIDTH_MIN = 170;
 const SIDEBAR_WIDTH_MAX = 520;
+const SIDEBAR_COLLAPSE_THRESHOLD = 70;
+const PANEL_HEIGHT_DEFAULT = 190;
+const PANEL_HEIGHT_MIN = 80;
+const PANEL_COLLAPSE_THRESHOLD = 50;
 const EDITOR_MIN_WIDTH = 300;
 
 export const FunctionsManager = {
-  _keydownHandler: null,
   listContainer: null,
   workspaceContainer: null,
   activeFunctionName: null,
@@ -435,53 +441,28 @@ export const FunctionsManager = {
     return SIDEBAR_WIDTH_DEFAULT;
   },
 
-  _removeKeydownHandler() {
-    if (this._keydownHandler) {
-      window.removeEventListener('keydown', this._keydownHandler);
-      this._keydownHandler = null;
-    }
+  getPanelHeight() {
+    try {
+      const stored = parseInt(localStorage.getItem(PANEL_HEIGHT_KEY), 10);
+      if (Number.isFinite(stored)) {
+        return Math.min(Math.max(stored, PANEL_HEIGHT_MIN), 500);
+      }
+    } catch {}
+    return PANEL_HEIGHT_DEFAULT;
   },
 
-  activatePanelPane(fn, pane) {
+  activatePanelPane(fn) {
     const ws = this.workspaceContainer;
     const panel = ws?.querySelector('.vsc-panel');
     if (!panel) return;
 
     panel.classList.remove('collapsed');
+    const h = this.getPanelHeight();
+    panel.style.setProperty('--vsc-panel-height', `${h}px`);
+    panel.style.height = `${h}px`;
 
-    panel.querySelectorAll('.vsc-panel-tab').forEach(tab => {
-      tab.classList.toggle('active', tab.getAttribute('data-pane') === pane);
-    });
-
-    panel.querySelectorAll('.vsc-pane').forEach(p => {
-      p.classList.toggle('hidden', p.getAttribute('data-pane') !== pane);
-    });
-
-    if (pane === 'terminal') {
-      this.loadTerminalLogs(fn.name);
-    }
-  },
-
-  async loadTerminalLogs(fnName) {
-    const ws = this.workspaceContainer;
-    const terminalEl = ws?.querySelector('.workspace-logs-terminal');
-    if (!terminalEl) return;
-
-    terminalEl.innerHTML = '<div class="text-muted" style="font-size: 12px;">Loglar yükleniyor...</div>';
-    try {
-      const logsRes = await getFunctionLogs(fnName);
-      const logs = (logsRes && logsRes.logs) ? logsRes.logs : [];
-      if (logs.length === 0) {
-        terminalEl.innerHTML = '<div class="text-muted" style="font-size: 12px;">Henüz log kaydı bulunamadı.</div>';
-        return;
-      }
-      terminalEl.innerHTML = logs
-        .map(line => `<div class="console-line" style="font-size: 12px; line-height: 1.4;">${escapeHtml(line)}</div>`)
-        .join('');
-      terminalEl.scrollTop = terminalEl.scrollHeight;
-    } catch (err) {
-      terminalEl.innerHTML = `<div class="text-danger" style="font-size: 12px;">Loglar alınamadı: ${escapeHtml(err.message)}</div>`;
-    }
+    ws.querySelector('[data-layout-act="toggle-panel"]')?.classList.add('active');
+    getEditor(`editor-main-${fn.name}`)?.layout();
   },
 
   updateStatusDeploy(fn) {
@@ -517,7 +498,6 @@ export const FunctionsManager = {
   },
 
   closeWorkspace() {
-    this._removeKeydownHandler();
     if (this.workspaceContainer) {
       this.workspaceContainer.classList.add('hidden');
       this.workspaceContainer.innerHTML = '';
@@ -560,8 +540,26 @@ export const FunctionsManager = {
 
     // Populate VS Code Shell
     const shell = clone.querySelector('.vscode-shell');
+    const isSidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
     if (shell) {
       shell.style.setProperty('--vsc-sidebar-width', `${this.getSidebarWidth()}px`);
+      if (isSidebarCollapsed) {
+        shell.classList.add('sidebar-hidden');
+        clone.querySelector('.vsc-activity-item[data-act="explorer"]')?.classList.remove('active');
+        clone.querySelector('[data-layout-act="toggle-sidebar"]')?.classList.remove('active');
+      }
+    }
+
+    const panel = clone.querySelector('.vsc-panel');
+    const isPanelCollapsed = localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true';
+    if (panel) {
+      const h = this.getPanelHeight();
+      panel.style.setProperty('--vsc-panel-height', `${h}px`);
+      panel.style.height = `${h}px`;
+      if (isPanelCollapsed) {
+        panel.classList.add('collapsed');
+        clone.querySelector('[data-layout-act="toggle-panel"]')?.classList.remove('active');
+      }
     }
 
     const fnFolderEl = clone.querySelector('.vsc-fn-folder-name');
@@ -713,9 +711,7 @@ export const FunctionsManager = {
         const act = item.getAttribute('data-act');
 
         if (act === 'explorer') {
-          shell?.classList.toggle('sidebar-hidden');
-          item.classList.toggle('active', !shell?.classList.contains('sidebar-hidden'));
-          getEditor(`editor-main-${fnName}`)?.layout();
+          toggleSidebar();
           return;
         }
 
@@ -744,7 +740,79 @@ export const FunctionsManager = {
       });
     });
 
-    // Sidebar resize sash & bunny easter egg
+    const panel = ws.querySelector('.vsc-panel');
+    const panelSash = ws.querySelector('.vsc-panel-sash');
+    const explorerItem = ws.querySelector('.vsc-activity-item[data-act="explorer"]');
+    const sidebarToggleBtn = ws.querySelector('[data-layout-act="toggle-sidebar"]');
+    const panelToggleBtn = ws.querySelector('[data-layout-act="toggle-panel"]');
+
+    // Layout Actions (Buttons 1, 2, 4)
+    const toggleSidebar = () => {
+      const isHidden = shell?.classList.contains('sidebar-hidden');
+      if (isHidden) {
+        shell?.classList.remove('sidebar-hidden');
+        explorerItem?.classList.add('active');
+        sidebarToggleBtn?.classList.add('active');
+        shell?.style.setProperty('--vsc-sidebar-width', `${this.getSidebarWidth()}px`);
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false'); } catch {}
+      } else {
+        shell?.classList.add('sidebar-hidden');
+        explorerItem?.classList.remove('active');
+        sidebarToggleBtn?.classList.remove('active');
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true'); } catch {}
+      }
+      getEditor(`editor-main-${fnName}`)?.layout();
+    };
+
+    const togglePanel = () => {
+      const isCollapsed = panel?.classList.contains('collapsed');
+      if (isCollapsed) {
+        panel?.classList.remove('collapsed');
+        panelToggleBtn?.classList.add('active');
+        const h = this.getPanelHeight();
+        panel?.style.setProperty('--vsc-panel-height', `${h}px`);
+        panel.style.height = `${h}px`;
+        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'false'); } catch {}
+      } else {
+        panel?.classList.add('collapsed');
+        panelToggleBtn?.classList.remove('active');
+        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch {}
+      }
+      getEditor(`editor-main-${fnName}`)?.layout();
+    };
+
+    const toggleFullscreen = () => {
+      const isFull = shell?.classList.toggle('vscode-fullscreen');
+      const maxIcon = ws.querySelector('.vsc-icon-maximize');
+      const restoreIcon = ws.querySelector('.vsc-icon-restore');
+      const fullBtn = ws.querySelector('[data-layout-act="toggle-fullscreen"]');
+
+      if (isFull) {
+        maxIcon?.classList.add('hidden');
+        restoreIcon?.classList.remove('hidden');
+        fullBtn?.classList.add('active');
+      } else {
+        maxIcon?.classList.remove('hidden');
+        restoreIcon?.classList.add('hidden');
+        fullBtn?.classList.remove('active');
+      }
+      getEditor(`editor-main-${fnName}`)?.layout();
+    };
+
+    ws.querySelector('[data-layout-act="toggle-sidebar"]')?.addEventListener('click', toggleSidebar);
+    ws.querySelector('[data-layout-act="toggle-panel"]')?.addEventListener('click', togglePanel);
+    ws.querySelector('[data-layout-act="toggle-fullscreen"]')?.addEventListener('click', toggleFullscreen);
+    ws.querySelector('[data-panel-goto="output"]')?.addEventListener('click', togglePanel);
+
+    // Escape key exits fullscreen
+    const escFullscreenHandler = (e) => {
+      if (e.key === 'Escape' && shell?.classList.contains('vscode-fullscreen')) {
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener('keydown', escFullscreenHandler);
+
+    // Sidebar resize sash with collapse & drag-to-reopen
     const sash = ws.querySelector('.vsc-sash');
     if (sash && shell) {
       sash.addEventListener('mousedown', (e) => {
@@ -755,19 +823,34 @@ export const FunctionsManager = {
           Math.max(SIDEBAR_WIDTH_MIN, shellRect.width - 48 - EDITOR_MIN_WIDTH)
         );
         const sidebar = ws.querySelector('.vsc-sidebar');
+        let isCollapsedDuringDrag = shell.classList.contains('sidebar-hidden');
 
         const onMove = (moveEvent) => {
-          const width = Math.min(
-            Math.max(moveEvent.clientX - shellRect.left - 48, SIDEBAR_WIDTH_MIN),
-            maxWidth
-          );
+          const rawWidth = moveEvent.clientX - shellRect.left - 48;
+
+          // Dragging past collapse threshold collapses the sidebar
+          if (rawWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
+            isCollapsedDuringDrag = true;
+            shell.classList.add('sidebar-hidden');
+            explorerItem?.classList.remove('active');
+            sidebarToggleBtn?.classList.remove('active');
+            sidebar?.classList.remove('bunny-out');
+            return;
+          }
+
+          // Otherwise restore/maintain expanded state
+          isCollapsedDuringDrag = false;
+          shell.classList.remove('sidebar-hidden');
+          explorerItem?.classList.add('active');
+          sidebarToggleBtn?.classList.add('active');
+
+          const width = Math.min(Math.max(rawWidth, SIDEBAR_WIDTH_MIN), maxWidth);
           shell.style.setProperty('--vsc-sidebar-width', `${width}px`);
           sidebar?.classList.toggle('bunny-out', width >= maxWidth);
+
           try {
             localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
-          } catch {
-            // ignore storage errors
-          }
+          } catch {}
         };
 
         const onUp = () => {
@@ -775,6 +858,11 @@ export const FunctionsManager = {
           document.removeEventListener('mouseup', onUp);
           sash.classList.remove('dragging');
           document.body.classList.remove('vsc-resizing');
+
+          try {
+            localStorage.setItem(SIDEBAR_COLLAPSED_KEY, isCollapsedDuringDrag ? 'true' : 'false');
+          } catch {}
+
           getEditor(`editor-main-${fnName}`)?.layout();
         };
 
@@ -785,33 +873,78 @@ export const FunctionsManager = {
       });
     }
 
-    // Panel tabs (Problems / Output / Terminal)
-    ws.querySelectorAll('.vsc-panel-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        this.activatePanelPane(fn, tab.getAttribute('data-pane'));
-      });
-    });
+    // Panel vertical resize sash with snap-to-collapse & drag-to-reopen
+    if (panelSash && panel && shell) {
+      panelSash.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const editorGroup = ws.querySelector('.vsc-editor-group');
+        const editorGroupRect = editorGroup?.getBoundingClientRect() || shell.getBoundingClientRect();
+        const startY = e.clientY;
+        const isInitiallyCollapsed = panel.classList.contains('collapsed');
+        const startHeight = isInitiallyCollapsed ? 0 : panel.offsetHeight;
+        let isPanelCollapsedDuringDrag = isInitiallyCollapsed;
 
-    // Status bar shortcut to Problems pane
-    ws.querySelector('[data-panel-goto="problems"]')?.addEventListener('click', () => {
-      this.activatePanelPane(fn, 'problems');
-    });
+        const onMove = (moveEvent) => {
+          const deltaY = startY - moveEvent.clientY;
+          const rawHeight = startHeight + deltaY;
+
+          // When moving down close to the "OUTPUT" header (< 38px), snap collapse like VS Code
+          if (rawHeight < 38) {
+            isPanelCollapsedDuringDrag = true;
+            panel.classList.add('collapsed');
+            panelToggleBtn?.classList.remove('active');
+            return;
+          }
+
+          // When moving up past the header threshold, snap back open and follow cursor
+          isPanelCollapsedDuringDrag = false;
+          panel.classList.remove('collapsed');
+          panelToggleBtn?.classList.add('active');
+
+          const maxHeight = Math.max(100, editorGroupRect.height - 70);
+          const height = Math.min(Math.max(rawHeight, 32), maxHeight);
+          panel.style.setProperty('--vsc-panel-height', `${height}px`);
+          panel.style.height = `${height}px`;
+
+          try {
+            localStorage.setItem(PANEL_HEIGHT_KEY, String(Math.round(height)));
+          } catch {}
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          panelSash.classList.remove('dragging');
+          document.body.classList.remove('vsc-resizing');
+
+          try {
+            localStorage.setItem(PANEL_COLLAPSED_KEY, isPanelCollapsedDuringDrag ? 'true' : 'false');
+          } catch {}
+
+          getEditor(`editor-main-${fnName}`)?.layout();
+        };
+
+        panelSash.classList.add('dragging');
+        document.body.classList.add('vsc-resizing');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
 
     // Panel action buttons (clear, maximize, close)
     ws.querySelectorAll('[data-panel-act]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const panel = ws.querySelector('.vsc-panel');
         const action = btn.getAttribute('data-panel-act');
 
         if (action === 'clear') {
           const consoleEl = ws.querySelector('.workspace-deploy-console');
           if (consoleEl) consoleEl.innerHTML = '';
-          const terminalEl = ws.querySelector('.workspace-logs-terminal');
-          if (terminalEl) terminalEl.innerHTML = '';
         } else if (action === 'maximize') {
           panel?.classList.toggle('maximized');
         } else if (action === 'close') {
           panel?.classList.add('collapsed');
+          panelToggleBtn?.classList.remove('active');
+          try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch {}
         }
         getEditor(`editor-main-${fnName}`)?.layout();
       });
@@ -1024,19 +1157,6 @@ export const FunctionsManager = {
         }
       });
     });
-
-    // Global keyboard shortcuts (⇧⌘U / Ctrl+Shift+U -> Deploy, ⇧⌘I / Ctrl+Shift+I -> Test)
-    this._removeKeydownHandler();
-    this._keydownHandler = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'u' || e.key === 'U')) {
-        e.preventDefault();
-        ws.querySelector('.btn-deploy')?.click();
-      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'i' || e.key === 'I')) {
-        e.preventDefault();
-        ws.querySelector('.btn-run-code')?.click();
-      }
-    };
-    window.addEventListener('keydown', this._keydownHandler);
   },
 
   renderEnvRows(fnName) {

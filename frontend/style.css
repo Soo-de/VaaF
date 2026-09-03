@@ -976,13 +976,14 @@ h4 {
 .vsc-sash {
   position: absolute;
   top: 0;
-  right: 0;
   bottom: 0;
-  width: 5px;
-  z-index: 5;
+  left: calc(48px + var(--vsc-sidebar-width, 250px));
+  width: 6px;
+  transform: translateX(-3px);
+  z-index: 25;
   background: transparent;
   cursor: col-resize;
-  transition: background 80ms ease 250ms;
+  transition: background 80ms ease 200ms;
 }
 
 .vsc-sash:hover,
@@ -992,7 +993,13 @@ h4 {
 }
 
 .vscode-shell.sidebar-hidden .vsc-sash {
-  display: none;
+  position: absolute;
+  top: 0;
+  left: 48px;
+  transform: translateX(0);
+  width: 6px;
+  z-index: 30;
+  display: block;
 }
 
 /* Easter Egg Bunny */
@@ -1152,8 +1159,11 @@ body.vsc-resizing {
 .vsc-deploy-actions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 6px 14px 10px;
+  align-items: center;
+  gap: clamp(6px, calc(var(--vsc-sidebar-width, 250px) * 0.03), 10px);
+  padding: 8px clamp(10px, calc(var(--vsc-sidebar-width, 250px) * 0.05), 18px) 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .vsc-deploy-header-tag {
@@ -1164,63 +1174,92 @@ body.vsc-resizing {
   opacity: 0.9;
 }
 
-.vsc-btn-deploy {
+.vsc-btn-deploy,
+.vsc-btn-run,
+.vsc-btn-test {
   width: 100%;
-  height: 34px;
+  height: clamp(30px, calc(24px + (var(--vsc-sidebar-width, 250px) * 0.036)), 40px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  background: var(--vsc-btn-deploy-bg);
-  color: var(--vsc-btn-deploy-fg);
-  border: none;
+  gap: clamp(6px, calc(var(--vsc-sidebar-width, 250px) * 0.025), 10px);
   border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 700;
+  font-family: var(--font-sans);
+  font-size: clamp(12px, calc(10.5px + (var(--vsc-sidebar-width, 250px) * 0.009)), 14.5px);
+  letter-spacing: 0.02em;
   cursor: pointer;
-  box-shadow: 0 2px 8px var(--accent-glow);
-  transition: all var(--transition-fast);
+  box-sizing: border-box;
+  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.vsc-btn-deploy svg,
+.vsc-btn-run svg,
+.vsc-btn-test svg {
+  width: clamp(13px, calc(11px + (var(--vsc-sidebar-width, 250px) * 0.01)), 16px);
+  height: clamp(13px, calc(11px + (var(--vsc-sidebar-width, 250px) * 0.01)), 16px);
+  flex-shrink: 0;
+}
+
+.vsc-btn-deploy {
+  background: var(--accent-primary);
+  color: #0a0a0a;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .vsc-btn-deploy:hover:not(:disabled) {
-  background: var(--vsc-btn-deploy-bg-hover);
+  background: var(--accent-hover);
+  box-shadow: 0 2px 8px var(--accent-glow);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.vsc-btn-deploy:active:not(:disabled) {
+  background: var(--accent-active);
+  transform: translateY(0);
 }
 
 .vsc-btn-deploy:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
 }
 
+.vsc-btn-run,
 .vsc-btn-test {
-  width: 100%;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: var(--vsc-btn-test-bg);
-  color: var(--vsc-btn-test-fg);
-  border: 1px solid var(--vsc-border);
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: 12px;
+  background: var(--bg-surface-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
   font-weight: 600;
-  cursor: pointer;
-  transition: all var(--transition-fast);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
+.vsc-btn-run svg,
+.vsc-btn-test svg {
+  color: var(--color-run);
+}
+
+.vsc-btn-run:hover:not(:disabled),
 .vsc-btn-test:hover:not(:disabled) {
-  background: var(--vsc-btn-test-bg-hover);
-  border-color: var(--border-color-hover);
+  background: var(--bg-surface-hover);
+  border-color: var(--color-run);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
+  transform: translateY(-1px);
 }
 
+.vsc-btn-run:active:not(:disabled),
+.vsc-btn-test:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.vsc-btn-run:disabled,
 .vsc-btn-test:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 /* Sidebar Environment Variables Editor (Amazon Lambda Style) */
@@ -1331,6 +1370,37 @@ body.vsc-resizing {
   align-items: stretch;
   background: var(--vsc-tabbar-bg);
   border-bottom: 1px solid var(--vsc-border);
+  position: relative;
+}
+
+.vsc-layout-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  z-index: 5;
+}
+
+.vsc-layout-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border-radius: 4px;
+  color: var(--vsc-sidebar-fg);
+  opacity: 0.75;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.vsc-layout-btn:hover {
+  background: var(--vsc-list-hover);
+  color: #ffffff;
+  opacity: 1;
 }
 
 .vsc-tab {
@@ -1356,7 +1426,7 @@ body.vsc-resizing {
 .vsc-tab-close {
   width: 18px;
   height: 18px;
-  margin-left: auto;
+  margin-left: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1414,25 +1484,64 @@ body.vsc-resizing {
   min-height: 160px;
 }
 
-/* --- Panel (Problems / Output / Terminal) --- */
+.vscode-shell.vscode-fullscreen {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99999 !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* --- Panel (Output Console with Resizable Sash) --- */
 
 .vsc-panel {
   flex: 0 0 auto;
-  height: 200px;
+  height: var(--vsc-panel-height, 190px);
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--vsc-panel-bg);
   border-top: 1px solid var(--vsc-border);
+  position: relative;
 }
 
 .vsc-panel.maximized {
   flex: 1 1 auto;
-  height: auto;
+  height: calc(100% - 35px) !important;
+  position: absolute;
+  top: 35px;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  z-index: 40;
 }
 
 .vsc-panel.collapsed {
-  display: none;
+  display: none !important;
+}
+
+.vsc-panel-sash {
+  height: 6px;
+  margin-top: -3px;
+  margin-bottom: -3px;
+  cursor: row-resize;
+  z-index: 35;
+  position: relative;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 80ms ease 150ms;
+}
+
+.vsc-panel-sash:hover,
+.vsc-panel-sash.dragging {
+  background: var(--vsc-focus);
+  transition-delay: 0ms;
 }
 
 .vsc-panel-header {
