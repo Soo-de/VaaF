@@ -119,6 +119,9 @@ class App {
         nameInput.classList.remove('input-valid');
         if (validationHint) validationHint.textContent = '';
 
+        // Record activity so newly created function is top-most
+        FunctionsManager.recordActivity(functionName);
+
         // Reload data from store and select the new function
         await FunctionsManager.loadFunctions(true);
         FunctionsManager.selectFunction(functionName);

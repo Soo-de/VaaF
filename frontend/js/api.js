@@ -154,7 +154,7 @@ export async function apiFetch(path, options = {}) {
 export async function createDraftFunction({ name, runtime = "python" }) {
   const draft = {
     name,
-    url: `http://${name}.vaaf-functions.svc.cluster.local`,
+    url: "",
     ready: false,
     deployed: false,
     created_at: new Date().toISOString(),
@@ -624,5 +624,61 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
   }
 
   return finalResult || { status: 'success', function_name: name };
+}
+
+/**
+ * Run code in sandbox with real-time SSE streaming.
+ * @param {string} code - Python code to execute
+ * @param {Object} [body={}] - Request body to pass to handler
+ * @param {Object} [envVars={}] - Environment variables
+ * @param {function(string, string): void} onEvent - SSE callback (eventType, data)
+ * @returns {Promise<{ status: string }>}
+ */
+export async function runCodeStream(code, body = {}, envVars = {}, onEvent = () => {}) {
+  const response = await apiFetch("/functions/run", {
+    method: "POST",
+    body: JSON.stringify({ code, body, environment: envVars })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    onEvent('error', `Sandbox başlatılamadı: ${response.status} - ${errorText}`);
+    throw new Error(`Run request failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      let eventType = "message";
+      let data = "";
+      for (const line of part.split("\n")) {
+        if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+        if (line.startsWith("data: ")) data = line.slice(6).trim();
+      }
+      onEvent(eventType, data);
+
+      if (eventType === 'done') {
+        try {
+          finalResult = JSON.parse(data);
+        } catch {
+          finalResult = { status: 'done', data };
+        }
+      }
+    }
+  }
+
+  return finalResult || { status: 'success' };
 }
 
