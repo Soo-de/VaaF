@@ -10,11 +10,13 @@ import {
   rollbackRevision,
   deleteFunction,
   getFunctionLogs,
-  proxyRequest
-} from './api.js?v=2.5';
-import { createEditor, getEditor, disposeEditor } from './editor.js?v=2.5';
-import { DeployManager } from './deploy.js?v=2.5';
-import { Toast, Modal, copyToClipboard, escapeHtml, formatDate } from './utils.js?v=2.5';
+  proxyRequest,
+  runCodeStream
+} from './api.js';
+import { createEditor, getEditor, disposeEditor } from './editor.js';
+import { DeployManager } from './deploy.js';
+import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey, getHttpStatusText } from './utils.js';
+
 
 export const FunctionsManager = {
   listContainer: null,
@@ -25,6 +27,72 @@ export const FunctionsManager = {
   testBodyState: new Map(),
   searchQuery: '',
   searchBound: false,
+  _lastLogContent: '',
+  _lastLogFnName: '',
+
+  // In-memory Session Cache per function (RAM / Zero storage footprint)
+  sessionCache: new Map(),
+
+  getActivityMap() {
+    try {
+      const raw = localStorage.getItem('faas_activity_map');
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  },
+
+  recordActivity(name) {
+    if (!name) return;
+    try {
+      const map = this.getActivityMap();
+      map[name] = Date.now();
+      localStorage.setItem('faas_activity_map', JSON.stringify(map));
+    } catch {}
+  },
+
+  deleteActivity(name) {
+    if (!name) return;
+    try {
+      const map = this.getActivityMap();
+      delete map[name];
+      localStorage.setItem('faas_activity_map', JSON.stringify(map));
+    } catch {}
+  },
+
+  sortFunctions() {
+    const activityMap = this.getActivityMap();
+    this.functionsData.sort((a, b) => {
+      const actA = activityMap[a.name] || 0;
+      const actB = activityMap[b.name] || 0;
+
+      const timeA = Math.max(
+        actA,
+        a.updated_at ? new Date(a.updated_at).getTime() : 0,
+        a.created_at ? new Date(a.created_at).getTime() : 0
+      );
+      const timeB = Math.max(
+        actB,
+        b.updated_at ? new Date(b.updated_at).getTime() : 0,
+        b.created_at ? new Date(b.created_at).getTime() : 0
+      );
+
+      if (timeA !== timeB) return timeB - timeA;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  },
+
+  getSession(fnName) {
+    if (!this.sessionCache.has(fnName)) {
+      this.sessionCache.set(fnName, {
+        code: null,
+        envMap: new Map(),
+        testBody: JSON.stringify({ key1: "value1" }, null, 2),
+        isLoaded: false
+      });
+    }
+    return this.sessionCache.get(fnName);
+  },
 
   init(listElement, workspaceElement) {
     this.listContainer = listElement;
@@ -66,7 +134,12 @@ export const FunctionsManager = {
 
     try {
       const data = await getFunctions();
-      this.functionsData = data.functions || [];
+      const rawFunctions = (data && Array.isArray(data.functions)) ? data.functions : [];
+
+      // Filter valid items and sort: most recently tested/deployed/updated first
+      this.functionsData = rawFunctions
+        .filter(f => f && typeof f.name === 'string' && f.name.length > 0);
+      this.sortFunctions();
 
       // Update count badge
       const countBadge = document.getElementById('functions-count-badge');
@@ -84,14 +157,21 @@ export const FunctionsManager = {
           if (statusCol) {
             statusCol.outerHTML = this.getStatusBadge(currentActive);
           }
+          // Also silently keep open revisions or monitor tab synchronized
+          const activeTab = this.workspaceContainer?.querySelector('.panel-tab-btn.active')?.getAttribute('data-tab');
+          if (activeTab === 'revisions') {
+            this.setupRevisionsTab(currentActive);
+          } else if (activeTab === 'monitor') {
+            this.loadLogs(this.activeFunctionName, 100);
+          }
         } else if (this.functionsData.length > 0) {
-          // Active function was deleted; select the latest available function
+          // Active function was deleted; select the top-most available function
           this.selectFunction(this.functionsData[0].name);
         } else {
           this.closeWorkspace();
         }
       } else if (this.functionsData.length > 0 && !silent) {
-        // Auto-select the latest saved function on initial load
+        // Auto-select the top-most (most recently deployed/updated) function on initial load
         this.selectFunction(this.functionsData[0].name);
       } else if (this.functionsData.length === 0) {
         this.closeWorkspace();
@@ -131,7 +211,7 @@ export const FunctionsManager = {
     }
 
     const filtered = this.searchQuery
-      ? this.functionsData.filter(f => f.name.toLowerCase().includes(this.searchQuery))
+      ? this.functionsData.filter(f => f && typeof f.name === 'string' && f.name.toLowerCase().includes(this.searchQuery))
       : this.functionsData;
 
     if (filtered.length === 0) {
@@ -185,11 +265,17 @@ export const FunctionsManager = {
     if (fn.deploying) {
       return `<span class="badge badge-deploying"><span class="pulse-dot"></span> Deploying</span>`;
     }
-    if (fn.ready) {
-      return `<span class="badge badge-ready"><span class="status-dot dot-green"></span> Ready</span>`;
+    // A function is "Deployed" if it has at least one ready revision (deployed flag)
+    // or if ready === true. It stays Deployed even when latest revision fails.
+    if (fn.deployed || fn.ready === true) {
+      return `<span class="badge badge-ready"><span class="status-dot dot-green"></span> Deployed</span>`;
     }
-    return `<span class="badge badge-not-ready"><span class="status-dot dot-red"></span> Not Ready</span>`;
+    if (fn.ready === null) {
+      return `<span class="badge badge-deploying"><span class="pulse-dot"></span> Deploying</span>`;
+    }
+    return `<span class="badge badge-not-ready"><span class="status-dot dot-red"></span> Not Deployed</span>`;
   },
+
 
   getRuntimeIcon(runtime = 'python') {
     const r = (runtime || 'python').toLowerCase();
@@ -206,12 +292,47 @@ export const FunctionsManager = {
     return `<span class="workspace-fn-icon">&lt;/&gt;</span>`;
   },
 
+  _copyUrlWithCheckmark(url, btn) {
+    if (!url || !url.startsWith('http')) return;
+
+    if (btn) {
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#16a34a" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+      `;
+      btn.classList.add('copy-success');
+      setTimeout(() => {
+        btn.innerHTML = origHtml;
+        btn.classList.remove('copy-success');
+      }, 1200);
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).catch(() => {});
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+    } catch {
+      // silent
+    }
+  },
+
   bindListEvents() {
     this.listContainer.querySelectorAll('.fn-list-item').forEach(item => {
       item.addEventListener('click', (e) => {
         if (e.target.closest('.copy-url-btn') || e.target.closest('.delete-btn')) return;
         const name = item.getAttribute('data-name');
-        this.selectFunction(name);
+        this.selectFunction(name, true);
       });
     });
 
@@ -219,7 +340,7 @@ export const FunctionsManager = {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const url = btn.getAttribute('data-url');
-        copyToClipboard(url, 'Fonksiyon URL\'i panoya kopyalandı');
+        this._copyUrlWithCheckmark(url, btn);
       });
     });
 
@@ -237,6 +358,8 @@ export const FunctionsManager = {
         if (confirmed) {
           try {
             await deleteFunction(name);
+            this.sessionCache.delete(name);
+            this.deleteActivity(name);
             Toast.success(`'${name}' başarıyla silindi.`);
 
             const wasActive = this.activeFunctionName === name;
@@ -266,8 +389,13 @@ export const FunctionsManager = {
   /**
    * Select a function and show its spacious workspace.
    * @param {string} name
+   * @param {boolean} [shouldScroll=false] - Only scroll into view if user explicitly clicked/created
    */
-  async selectFunction(name) {
+  async selectFunction(name, shouldScroll = false) {
+    if (this.activeFunctionName && this.activeFunctionName !== name) {
+      disposeEditor(`editor-main-${this.activeFunctionName}`);
+      disposeEditor(`editor-test-req-${this.activeFunctionName}`);
+    }
     this.activeFunctionName = name;
     this.renderList();
 
@@ -275,7 +403,18 @@ export const FunctionsManager = {
     if (!fn || !this.workspaceContainer) return;
 
     this.workspaceContainer.classList.remove('hidden');
-    this.renderWorkspace(fn);
+    await this.renderWorkspace(fn);
+
+    if (shouldScroll) {
+      setTimeout(() => {
+        this.workspaceContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        getEditor(`editor-main-${name}`)?.layout();
+      }, 120);
+    } else {
+      setTimeout(() => {
+        getEditor(`editor-main-${name}`)?.layout();
+      }, 100);
+    }
   },
 
   closeWorkspace() {
@@ -296,169 +435,39 @@ export const FunctionsManager = {
    * @param {Object} fn
    */
   async renderWorkspace(fn) {
-    const fnName = escapeHtml(fn.name);
-    const statusBadge = this.getStatusBadge(fn);
-    const runtimeIcon = this.getRuntimeIcon(fn.runtime);
+    const fnName = fn.name;
+    const template = document.getElementById('workspace-template');
+    if (!template || !this.workspaceContainer) return;
 
-    this.workspaceContainer.innerHTML = `
-      <div class="workspace-header">
-        <div class="workspace-header-left">
-          <div class="workspace-title-group">
-            ${runtimeIcon}
-            <h3 class="workspace-title">${fnName}</h3>
-            ${statusBadge}
-          </div>
-          <div class="workspace-url-box">
-            <span class="url-text" title="${escapeHtml(fn.url)}">${escapeHtml(fn.url)}</span>
-            <button class="icon-btn copy-url-btn" data-url="${escapeHtml(fn.url)}" title="Kopyala">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            </button>
-          </div>
-        </div>
+    this.workspaceContainer.innerHTML = '';
+    const clone = template.content.cloneNode(true);
 
-        <div class="workspace-header-right">
-          <button class="icon-btn workspace-close-btn" title="Kapat">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-      </div>
+    // Populate Header Info
+    const runtimeIconSlot = clone.querySelector('.workspace-runtime-icon');
+    if (runtimeIconSlot) runtimeIconSlot.innerHTML = this.getRuntimeIcon(fn.runtime);
 
-      <!-- Navigation Tabs -->
-      <div class="panel-tabs-bar">
-        <button class="panel-tab-btn active" data-tab="code">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
-          <span>Kod</span>
-        </button>
-        <button class="panel-tab-btn" data-tab="test">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          <span>Test</span>
-        </button>
-        <button class="panel-tab-btn" data-tab="revisions">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
-          <span>Sürümler</span>
-        </button>
-        <button class="panel-tab-btn tab-disabled" data-tab="monitor" disabled title="Bu özellik MVP'de aktif değildir">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-          <span>Monitor</span>
-          <span class="badge badge-soon">Yakında</span>
-        </button>
-      </div>
+    const titleEl = clone.querySelector('.workspace-title');
+    if (titleEl) titleEl.textContent = fnName;
 
-      <!-- Tab 1: Kod (IDE & HackerRank Style Split View) -->
-      <div class="panel-tab-content active" id="tab-content-code-${fnName}">
-        <div class="editor-action-bar">
-          <div class="code-subtabs-bar">
-            <button class="subtab-btn active" data-subtab="editor">Editor</button>
-            <button class="subtab-btn" data-subtab="env">Environment</button>
-          </div>
+    const statusBadgeSlot = clone.querySelector('.workspace-status-badge-slot');
+    if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(fn);
 
-          <div class="action-btn-group">
-            <button class="btn btn-run" id="run-code-btn-${fnName}">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              <span>Run Code</span>
-            </button>
-            <button class="btn btn-primary btn-deploy" id="deploy-btn-${fnName}">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v10m0 0l-4-4m4 4l4-4M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"></path></svg>
-              <span>Deploy</span>
-            </button>
-          </div>
-        </div>
+    const urlTextEl = clone.querySelector('.url-text');
+    this._updateUrlDisplay(urlTextEl, fn);
 
-        <div class="code-ide-layout">
-          <!-- Editor Pane -->
-          <div class="ide-editor-container">
-            <div class="subtab-pane active" id="pane-editor-${fnName}">
-              <div class="editor-wrapper">
-                <div id="editor-container-${fnName}" class="monaco-editor-instance"></div>
-              </div>
-            </div>
+    const copyBtn = clone.querySelector('.copy-url-btn');
+    if (copyBtn) copyBtn.dataset.url = fn.url;
 
-            <div class="subtab-pane hidden" id="pane-env-${fnName}">
-              <div class="env-vars-manager" id="env-vars-container-${fnName}">
-                <div class="env-table-header">
-                  <span>Anahtar (Key)</span>
-                  <span>Değer (Value)</span>
-                  <span>İşlem</span>
-                </div>
-                <div class="env-rows-list" id="env-rows-${fnName}"></div>
-                <button class="btn btn-secondary btn-sm mt-3" id="add-env-btn-${fnName}">
-                  + Değişken Ekle
-                </button>
-              </div>
-            </div>
-          </div>
+    this.workspaceContainer.appendChild(clone);
+    this.workspaceContainer.classList.remove('hidden');
 
-          <!-- HackerRank-style Output Pane -->
-          <div class="ide-output-container">
-            <div class="output-header">
-              <span class="output-tab-title">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-                Output & Deploy Console
-              </span>
-            </div>
-            <div class="console-body" id="console-body-${fnName}">
-              <div class="console-line text-muted">Kodu çalıştırmak için "Run Code", canlıya almak için "Deploy" butonuna basın.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 2: Test -->
-      <div class="panel-tab-content hidden" id="tab-content-test-${fnName}">
-        <div class="test-layout-wrapper">
-          <!-- Request Box -->
-          <div class="test-request-box">
-            <div class="section-title">Request Body (JSON)</div>
-            <div id="editor-test-req-${fnName}" class="monaco-test-editor"></div>
-            <button class="btn btn-primary mt-3" id="run-test-btn-${fnName}">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              <span>Test Et</span>
-            </button>
-          </div>
-
-          <!-- Lambda Style Result Card (Hidden until tested) -->
-          <div class="lambda-test-card hidden" id="test-result-box-${fnName}">
-            <div class="lambda-test-header">
-              <div class="lambda-header-left">
-                <span class="lambda-status-icon" id="lambda-status-icon-${fnName}">✔</span>
-                <span class="lambda-status-title" id="lambda-status-title-${fnName}">Yürütme işlevi: başarılı</span>
-              </div>
-              <button class="lambda-toggle-btn open" id="lambda-toggle-btn-${fnName}">
-                <svg class="lambda-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                <span>Ayrıntılar</span>
-              </button>
-            </div>
-
-            <div class="lambda-details-body" id="lambda-details-${fnName}">
-              <div class="lambda-response-section">
-                <div class="lambda-response-header">
-                  <span class="lambda-section-subtitle">Response</span>
-                  <div class="lambda-meta-tags">
-                    <span class="badge" id="lambda-status-badge-${fnName}">200 OK</span>
-                    <span class="lambda-duration-tag" id="lambda-duration-tag-${fnName}">0 ms</span>
-                  </div>
-                </div>
-                <pre class="lambda-response-pre" id="lambda-response-pre-${fnName}"></pre>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 3: Sürümler -->
-      <div class="panel-tab-content hidden" id="tab-content-revisions-${fnName}">
-        <div class="revisions-wrapper" id="revisions-list-${fnName}">
-          <div class="text-muted p-3">Sürümler yükleniyor...</div>
-        </div>
-      </div>
-    `;
-
-    this.bindWorkspaceEvents(fn);
+    await this.bindWorkspaceEvents(fn);
   },
 
   async bindWorkspaceEvents(fn) {
     const fnName = fn.name;
     const ws = this.workspaceContainer;
+    if (!ws) return;
 
     // Close button
     ws.querySelector('.workspace-close-btn')?.addEventListener('click', () => {
@@ -466,50 +475,115 @@ export const FunctionsManager = {
       this.renderList();
     });
 
-    // Copy URL
-    ws.querySelector('.workspace-url-box .copy-url-btn')?.addEventListener('click', () => {
-      copyToClipboard(fn.url, 'Fonksiyon URL\'i panoya kopyalandı');
+    // Copy URL (In-place checkmark feedback, zero popup)
+    ws.querySelector('.copy-url-btn')?.addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      const currentFn = this.functionsData.find(f => f.name === fnName) || fn;
+      if (currentFn?.url) {
+        this._copyUrlWithCheckmark(currentFn.url, btn);
+      }
     });
 
     // Main Tab Switcher
-    const tabBtns = ws.querySelectorAll('.panel-tab-btn:not(.tab-disabled)');
+    const tabBtns = ws.querySelectorAll('.panel-tab-btn');
+    const tabPanes = ws.querySelectorAll('.panel-tab-content');
+    const tabRefreshBtn = ws.querySelector('.btn-tab-refresh');
+
+    const updateRefreshVisibility = () => {
+      if (tabRefreshBtn) tabRefreshBtn.classList.remove('hidden');
+    };
+
     tabBtns.forEach(btn => {
       btn.addEventListener('click', () => {
         const targetTab = btn.getAttribute('data-tab');
         tabBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
 
-        ws.querySelectorAll('.panel-tab-content').forEach(c => {
-          c.classList.add('hidden');
-          c.classList.remove('active');
+        tabPanes.forEach(pane => {
+          if (pane.getAttribute('data-content-tab') === targetTab) {
+            pane.classList.remove('hidden');
+            pane.classList.add('active');
+          } else {
+            pane.classList.add('hidden');
+            pane.classList.remove('active');
+          }
         });
 
-        const activeContent = ws.querySelector(`#tab-content-${targetTab}-${fnName}`);
-        if (activeContent) {
-          activeContent.classList.remove('hidden');
-          activeContent.classList.add('active');
-        }
+        updateRefreshVisibility(targetTab);
 
         if (targetTab === 'test') {
           this.setupTestTab(fn);
         } else if (targetTab === 'revisions') {
           this.setupRevisionsTab(fn);
+        } else if (targetTab === 'monitor') {
+          this.setupMonitorTab(fn);
         } else if (targetTab === 'code') {
           getEditor(`editor-main-${fnName}`)?.layout();
         }
       });
     });
 
+    // Tab-bar refresh button: context-sensitive with in-place green checkmark feedback
+    if (tabRefreshBtn) {
+      tabRefreshBtn.addEventListener('click', async () => {
+        if (tabRefreshBtn.disabled) return;
+        tabRefreshBtn.disabled = true;
+
+        const origHtml = tabRefreshBtn.innerHTML;
+        const svgIcon = tabRefreshBtn.querySelector('svg');
+        svgIcon?.classList.add('spin-anim');
+
+        const activeTab = ws.querySelector('.panel-tab-btn.active')?.getAttribute('data-tab');
+        const freshFn = this.functionsData.find(f => f.name === fnName) || fn;
+
+        try {
+          if (activeTab === 'code') {
+            await this.loadFunctions(true);
+            const updatedFn = this.functionsData.find(f => f.name === fnName);
+            if (updatedFn) {
+              const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+              if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
+              const urlTextEl = ws.querySelector('.url-text');
+              this._updateUrlDisplay(urlTextEl, updatedFn);
+            }
+          } else if (activeTab === 'test') {
+            await this.loadFunctions(true);
+          } else if (activeTab === 'revisions') {
+            await this.setupRevisionsTab(freshFn);
+          } else if (activeTab === 'monitor') {
+            this._lastLogContent = '';
+            await this.loadLogs(fnName, 100);
+          }
+
+          // In-place Instant Checkmark: zero animation, exact same button size
+          tabRefreshBtn.classList.add('btn-refresh-success');
+          tabRefreshBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span>Yenilendi</span>
+          `;
+        } catch (err) {
+          Toast.error(`Yenileme hatası: ${err.message}`);
+        } finally {
+          setTimeout(() => {
+            tabRefreshBtn.classList.remove('btn-refresh-success');
+            tabRefreshBtn.innerHTML = origHtml;
+            tabRefreshBtn.disabled = false;
+          }, 1200);
+        }
+      });
+    }
+
     // Subtabs: Editor vs Env
     const subtabBtns = ws.querySelectorAll('.subtab-btn');
+    const editorPane = ws.querySelector('.subtab-pane[data-pane="editor"]');
+    const envPane = ws.querySelector('.subtab-pane[data-pane="env"]');
     subtabBtns.forEach(btn => {
       btn.addEventListener('click', () => {
         const subtab = btn.getAttribute('data-subtab');
         subtabBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-
-        const editorPane = ws.querySelector(`#pane-editor-${fnName}`);
-        const envPane = ws.querySelector(`#pane-env-${fnName}`);
 
         if (subtab === 'editor') {
           editorPane?.classList.remove('hidden');
@@ -526,90 +600,100 @@ export const FunctionsManager = {
       });
     });
 
-    // Load initial code and env
-    let codeContent = fn.code || '';
-    let envMap = new Map();
-    try {
-      const codeRes = await getFunctionCode(fnName);
-      if (codeRes && codeRes.code) {
-        codeContent = codeRes.code;
-        if (codeRes.env) {
-          Object.entries(codeRes.env).forEach(([k, v]) => envMap.set(k, v));
+    // Load initial code and env from in-memory session or backend
+    const session = this.getSession(fnName);
+    if (!session.isLoaded) {
+      let codeContent = fn.code || '';
+      let envMap = new Map();
+      try {
+        const codeRes = await getFunctionCode(fnName);
+        if (codeRes && codeRes.code) {
+          codeContent = codeRes.code;
+          if (codeRes.environment) {
+            Object.entries(codeRes.environment).forEach(([k, v]) => envMap.set(k, v));
+          }
         }
+      } catch {
+        // fallback
       }
-    } catch {
-      // fallback
+      session.code = codeContent;
+      session.envMap = envMap;
+      session.isLoaded = true;
     }
 
-    this.envVarsState.set(fnName, envMap);
     this.renderEnvRows(fnName);
 
     // Add env variable button
-    const addEnvBtn = ws.querySelector(`#add-env-btn-${fnName}`);
+    const addEnvBtn = ws.querySelector('.btn-add-env');
     addEnvBtn?.addEventListener('click', () => {
-      const currentMap = this.envVarsState.get(fnName) || new Map();
-      const newKey = `KEY_${currentMap.size + 1}`;
-      currentMap.set(newKey, '');
-      this.envVarsState.set(fnName, currentMap);
+      const newKey = `KEY_${session.envMap.size + 1}`;
+      session.envMap.set(newKey, '');
       this.renderEnvRows(fnName);
     });
 
     // Initialize Monaco Editor
-    const editorContainer = ws.querySelector(`#editor-container-${fnName}`);
+    const editorContainer = ws.querySelector('.workspace-main-editor');
     if (editorContainer) {
-      await createEditor(editorContainer, {
+      const editorInstance = await createEditor(editorContainer, {
         id: `editor-main-${fnName}`,
-        value: codeContent,
+        value: session.code,
         language: 'python'
+      });
+      editorInstance?.onDidChangeModelContent(() => {
+        session.code = editorInstance.getValue();
       });
     }
 
-    // Run Code Button (HackerRank style quick runner)
-    const runBtn = ws.querySelector(`#run-code-btn-${fnName}`);
+    // Run Code button (SSE Real-Time Stream)
+    const runBtn = ws.querySelector('.btn-run-code');
     runBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
-      const latestCode = editorInstance ? editorInstance.getValue() : codeContent;
-      const targetConsoleBody = ws.querySelector(`#console-body-${fnName}`) || ws.querySelector('.console-body');
+      const latestCode = editorInstance ? editorInstance.getValue() : session.code;
+      const consoleWrapper = ws.querySelector('.ide-output-container');
+      const consoleBody = consoleWrapper?.querySelector('.console-body') || consoleWrapper;
+
+      if (!consoleBody) return;
+      consoleWrapper?.classList.remove('hidden');
+
+      // Record activity so tested function jumps to the top
+      this.recordActivity(fnName);
+      this.sortFunctions();
+      this.renderList();
 
       const origHtml = runBtn.innerHTML;
       runBtn.disabled = true;
-      runBtn.innerHTML = `<span class="spinner"></span> <span>Çalışıyor...</span>`;
+      runBtn.innerHTML = `<span class="spinner"></span><span>Çalıştırılıyor...</span>`;
 
-      if (targetConsoleBody) {
-        const timestamp = new Date().toLocaleTimeString('tr-TR');
-        targetConsoleBody.innerHTML = `
-          <div class="console-line"><span class="console-ts">[${timestamp}]</span> <strong class="console-step">▶ Kod çalıştırılıyor (Local / Proxy Execution)...</strong></div>
-        `;
-      }
+      consoleBody.innerHTML = '';
+      const ts = () => new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const addLine = (cls, html) => {
+        const el = document.createElement('div');
+        el.className = `console-line ${cls}`;
+        el.innerHTML = html;
+        consoleBody.appendChild(el);
+        consoleBody.scrollTop = consoleBody.scrollHeight;
+      };
 
       try {
-        const startTime = performance.now();
-        const res = await proxyRequest({
-          url: fn.url,
-          method: 'POST',
-          body: { name: 'Test Runner' }
+        await runCodeStream(latestCode, { key1: 'value1' }, {}, (eventType, data) => {
+          if (eventType === 'step') {
+            addLine('console-line-step', `<span class="console-ts">[${ts()}]</span> <strong class="console-step">${escapeHtml(data)}</strong>`);
+          } else if (eventType === 'log') {
+            addLine('console-line-log', `<span class="console-ts">[${ts()}]</span> <span>${escapeHtml(data)}</span>`);
+          } else if (eventType === 'result') {
+            try {
+              const parsed = JSON.parse(data);
+              addLine('console-line-step', `<span class="console-ts">[${ts()}]</span> <strong class="console-step">Return Değeri:</strong>`);
+              addLine('console-line-log', `<pre style="margin:0.25rem 0;padding:0.5rem;background:rgba(255,255,255,0.03);border-radius:4px;border:1px solid var(--border-color);">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`);
+            } catch {
+              addLine('console-line-log', `<span class="console-ts">[${ts()}]</span> <span>Return: ${escapeHtml(data)}</span>`);
+            }
+          } else if (eventType === 'error') {
+            addLine('console-line-error', `<span class="console-ts">[${ts()}]</span> <span class="console-error">❌ ${escapeHtml(data)}</span>`);
+          }
         });
-        const duration = Math.round(performance.now() - startTime);
-
-        if (targetConsoleBody) {
-          const timestamp = new Date().toLocaleTimeString('tr-TR');
-          const isSuccess = res.statusCode >= 200 && res.statusCode < 300;
-          const statusClass = isSuccess ? 'dot-green' : 'dot-red';
-
-          targetConsoleBody.innerHTML += `
-            <div class="console-line"><span class="console-ts">[${timestamp}]</span> <span class="badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}"><span class="status-dot ${statusClass}"></span> Status: ${res.statusCode} OK</span> <span class="text-muted">(${duration}ms)</span></div>
-            <div class="console-line mt-1"><strong>Program Çıktısı (stdout / return):</strong></div>
-            <pre class="console-output-pre">${escapeHtml(JSON.stringify(res.body, null, 2))}</pre>
-          `;
-          targetConsoleBody.scrollTop = targetConsoleBody.scrollHeight;
-        }
-
-        Toast.success(`Kod başarıyla çalıştırıldı (${duration}ms)`);
       } catch (err) {
-        if (targetConsoleBody) {
-          targetConsoleBody.innerHTML += `<div class="console-line console-error">❌ Hata: ${escapeHtml(err.message)}</div>`;
-        }
-        Toast.error(`Çalıştırma hatası: ${err.message}`);
+        addLine('console-line-error', `<span class="console-ts">[${ts()}]</span> <span class="console-error">❌ ${escapeHtml(err.message)}</span>`);
       } finally {
         runBtn.disabled = false;
         runBtn.innerHTML = origHtml;
@@ -617,31 +701,88 @@ export const FunctionsManager = {
     });
 
     // Deploy button
-    const deployBtn = ws.querySelector(`#deploy-btn-${fnName}`);
+    const deployBtn = ws.querySelector('.btn-deploy');
     deployBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
-      const latestCode = editorInstance ? editorInstance.getValue() : codeContent;
+      const latestCode = editorInstance ? editorInstance.getValue() : session.code;
 
+      const envRows = ws.querySelectorAll('.env-row');
       const envObj = {};
-      const currentEnv = this.envVarsState.get(fnName);
-      if (currentEnv) {
-        for (const [k, v] of currentEnv.entries()) {
-          if (k.trim()) envObj[k.trim()] = v;
+      let hasEnvError = false;
+
+      envRows.forEach(row => {
+        const keyInput = row.querySelector('.env-key-input');
+        const valInput = row.querySelector('.env-val-input');
+        const errSpan = row.querySelector('.env-key-error');
+        const rawKey = keyInput ? keyInput.value.trim() : '';
+        const rawVal = valInput ? valInput.value : '';
+
+        if (rawKey) {
+          const { isValid, error } = validateEnvKey(rawKey);
+          if (!isValid) {
+            hasEnvError = true;
+            keyInput?.classList.add('input-invalid');
+            if (errSpan) errSpan.textContent = error || 'Geçersiz değişken adı';
+            Toast.error(error);
+          } else {
+            keyInput?.classList.remove('input-invalid');
+            if (errSpan) errSpan.textContent = '';
+            envObj[rawKey] = rawVal;
+          }
         }
+      });
+
+      if (hasEnvError) return;
+
+      const currentFn = this.functionsData.find(f => f.name === fnName);
+      const isUpdate = Boolean(currentFn && (currentFn.ready || currentFn.deployed || (currentFn.revisions && currentFn.revisions.length > 0)));
+
+      if (currentFn) {
+        currentFn.deploying = true;
+        this.renderList();
+        const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+        if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
       }
 
-      // Format console container wrapper for DeployManager
       const consoleWrapper = ws.querySelector('.ide-output-container');
 
       await DeployManager.runDeploy({
         functionName: fnName,
         code: latestCode,
-        isUpdate: true,
+        isUpdate: isUpdate,
         envVars: envObj,
         consoleElement: consoleWrapper,
         deployBtn,
-        onComplete: () => {
+        onComplete: async () => {
+          if (currentFn) {
+            currentFn.deploying = false;
+            currentFn.ready = true;
+            currentFn.deployed = true;
+          }
+          session.code = latestCode;
+
+          this.recordActivity(fnName);
+          await this.loadFunctions(true);
+
+          const updatedFn = this.functionsData.find(f => f.name === fnName);
+          if (updatedFn) {
+            const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+            if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
+            const urlTextEl = ws.querySelector('.url-text');
+            this._updateUrlDisplay(urlTextEl, updatedFn);
+          }
+
+          this.refreshActiveRevisions();
+        },
+        onError: () => {
+          if (currentFn) {
+            currentFn.deploying = false;
+            this.renderList();
+            const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
+            if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+          }
           this.loadFunctions(true);
+          this.refreshActiveRevisions();
         }
       });
     });
@@ -649,10 +790,11 @@ export const FunctionsManager = {
 
   renderEnvRows(fnName) {
     const ws = this.workspaceContainer;
-    const container = ws?.querySelector(`#env-rows-${fnName}`);
+    const container = ws?.querySelector('.env-rows-list');
     if (!container) return;
 
-    const envMap = this.envVarsState.get(fnName) || new Map();
+    const session = this.getSession(fnName);
+    const envMap = session.envMap;
     if (envMap.size === 0) {
       container.innerHTML = `<div class="text-muted p-2">Henüz ortam değişkeni tanımlanmadı.</div>`;
       return;
@@ -661,11 +803,19 @@ export const FunctionsManager = {
     let rows = '';
     let idx = 0;
     for (const [k, v] of envMap.entries()) {
+      const { isValid, error } = validateEnvKey(k);
+      const invalidClass = (k && !isValid) ? ' input-invalid' : '';
+      const errorText = (k && !isValid) ? (error || '') : '';
       rows += `
-        <div class="env-row" data-index="${idx}">
-          <input type="text" class="input env-key-input" placeholder="ANAHTAR" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
-          <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
-          <button class="icon-btn delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil">
+        <div class="env-row" data-index="${idx}" style="align-items: flex-start; margin-bottom: 10px;">
+          <div class="env-key-col" style="flex: 1; display: flex; flex-direction: column;">
+            <input type="text" class="input env-key-input${invalidClass}" placeholder="ANAHTAR (örn: API_KEY)" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
+            <span class="env-key-error text-danger" style="font-size: 11px; color: #f87171; min-height: 14px; margin-top: 3px;">${escapeHtml(errorText)}</span>
+          </div>
+          <div class="env-val-col" style="flex: 1; display: flex; flex-direction: column;">
+            <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
+          </div>
+          <button class="icon-btn delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil" style="margin-top: 6px;">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
@@ -675,14 +825,32 @@ export const FunctionsManager = {
     container.innerHTML = rows;
 
     container.querySelectorAll('.env-key-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const val = input.value.trim();
+        const row = input.closest('.env-row');
+        const errSpan = row?.querySelector('.env-key-error');
+        if (val) {
+          const { isValid, error } = validateEnvKey(val);
+          if (!isValid) {
+            input.classList.add('input-invalid');
+            if (errSpan) errSpan.textContent = error || 'Geçersiz değişken adı';
+          } else {
+            input.classList.remove('input-invalid');
+            if (errSpan) errSpan.textContent = '';
+          }
+        } else {
+          input.classList.remove('input-invalid');
+          if (errSpan) errSpan.textContent = '';
+        }
+      });
+
       input.addEventListener('change', () => {
         const oldKey = input.getAttribute('data-oldkey');
         const newKey = input.value.trim();
-        const map = this.envVarsState.get(fnName);
         if (oldKey !== newKey && newKey) {
-          const val = map.get(oldKey) || '';
-          map.delete(oldKey);
-          map.set(newKey, val);
+          const val = session.envMap.get(oldKey) || '';
+          session.envMap.delete(oldKey);
+          session.envMap.set(newKey, val);
           this.renderEnvRows(fnName);
         }
       });
@@ -691,9 +859,8 @@ export const FunctionsManager = {
     container.querySelectorAll('.env-val-input').forEach(input => {
       input.addEventListener('input', () => {
         const key = input.getAttribute('data-key');
-        const map = this.envVarsState.get(fnName);
-        if (map && key) {
-          map.set(key, input.value);
+        if (session.envMap && key) {
+          session.envMap.set(key, input.value);
         }
       });
     });
@@ -701,9 +868,8 @@ export const FunctionsManager = {
     container.querySelectorAll('.delete-env-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const key = btn.getAttribute('data-key');
-        const map = this.envVarsState.get(fnName);
-        if (map && key) {
-          map.delete(key);
+        if (session.envMap && key) {
+          session.envMap.delete(key);
           this.renderEnvRows(fnName);
         }
       });
@@ -715,45 +881,65 @@ export const FunctionsManager = {
     const ws = this.workspaceContainer;
     if (!ws) return;
 
-    const testReqContainer = ws.querySelector(`#editor-test-req-${fnName}`);
-    if (testReqContainer && !getEditor(`editor-test-req-${fnName}`)) {
-      const initialVal = this.testBodyState.get(fnName) || JSON.stringify({ key1: "value1" }, null, 2);
-      const testEditor = await createEditor(testReqContainer, {
-        id: `editor-test-req-${fnName}`,
-        value: initialVal,
-        language: 'json',
-        fontSize: 14.5
-      });
-      testEditor.onDidChangeModelContent(() => {
-        this.testBodyState.set(fnName, testEditor.getValue());
-      });
-    } else {
-      getEditor(`editor-test-req-${fnName}`)?.layout();
-    }
-
-    const testBtn = ws.querySelector(`#run-test-btn-${fnName}`);
-    if (!testBtn || testBtn.dataset.bound === 'true') {
-      return;
-    }
-    testBtn.dataset.bound = 'true';
-
-    // Toggle details button
-    const toggleBtn = ws.querySelector(`#lambda-toggle-btn-${fnName}`);
-    const detailsBody = ws.querySelector(`#lambda-details-${fnName}`);
-    toggleBtn?.addEventListener('click', () => {
-      const isOpen = toggleBtn.classList.contains('open');
-      if (isOpen) {
-        toggleBtn.classList.remove('open');
-        detailsBody?.classList.add('hidden');
+    const session = this.getSession(fnName);
+    const testReqContainer = ws.querySelector('.workspace-test-editor');
+    if (testReqContainer) {
+      const existing = getEditor(`editor-test-req-${fnName}`);
+      const isConnected = existing && testReqContainer.contains(existing.getDomNode());
+      if (!isConnected) {
+        const testEditor = await createEditor(testReqContainer, {
+          id: `editor-test-req-${fnName}`,
+          value: session.testBody || JSON.stringify({ key1: "value1" }, null, 2),
+          language: 'json',
+          fontSize: 14.5
+        });
+        testEditor?.onDidChangeModelContent(() => {
+          session.testBody = testEditor.getValue();
+        });
       } else {
-        toggleBtn.classList.add('open');
-        detailsBody?.classList.remove('hidden');
+        existing.layout();
       }
-    });
+    }
 
-    // Test button
-    testBtn.addEventListener('click', async () => {
+    const testBtn = ws.querySelector('.btn-run-test');
+    const toggleBtn = ws.querySelector('.lambda-toggle-btn');
+    const detailsBody = ws.querySelector('.lambda-details-body');
+
+    // Deterministic toggle for Ayrıntılar button
+    if (toggleBtn && detailsBody) {
+      toggleBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const isHidden = detailsBody.classList.contains('hidden');
+        if (isHidden) {
+          detailsBody.classList.remove('hidden');
+          toggleBtn.classList.add('open');
+        } else {
+          detailsBody.classList.add('hidden');
+          toggleBtn.classList.remove('open');
+        }
+      };
+    }
+
+    if (!testBtn) return;
+
+    // Test execution handler
+    testBtn.onclick = async () => {
       if (testBtn.disabled) return;
+
+      const currentFn = this.functionsData.find(f => f.name === fnName) || fn;
+      const isDeployed = Boolean(currentFn && (currentFn.deployed || currentFn.ready || (currentFn.revisions && currentFn.revisions.length > 0)));
+
+      if (!isDeployed) {
+        Toast.info("Fonksiyon henüz cluster'a deploy edilmedi. Lütfen önce Kod sekmesinden 'Deploy' butonuna basın.");
+        return;
+      }
+
+      const targetUrl = currentFn.url;
+      if (!targetUrl || !targetUrl.startsWith('http')) {
+        Toast.error("Fonksiyon canlı URL'i henüz hazır değil. Lütfen birkaç saniye sonra tekrar deneyin veya Yenile butonuna basın.");
+        return;
+      }
 
       const editor = getEditor(`editor-test-req-${fnName}`);
       let reqBody = {};
@@ -764,25 +950,34 @@ export const FunctionsManager = {
         return;
       }
 
+      // Record activity so tested function jumps to the top
+      this.recordActivity(fnName);
+      this.sortFunctions();
+      this.renderList();
+
       const defaultBtnHtml = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><span>Test Et</span>`;
       testBtn.disabled = true;
       testBtn.innerHTML = `<span class="spinner"></span> <span>İstek Gönderiliyor...</span>`;
 
-      const resultBox = ws.querySelector(`#test-result-box-${fnName}`);
-      const iconEl = ws.querySelector(`#lambda-status-icon-${fnName}`);
-      const titleEl = ws.querySelector(`#lambda-status-title-${fnName}`);
-      const badgeEl = ws.querySelector(`#lambda-status-badge-${fnName}`);
-      const durEl = ws.querySelector(`#lambda-duration-tag-${fnName}`);
-      const bodyPre = ws.querySelector(`#lambda-response-pre-${fnName}`);
+      const resultBox = ws.querySelector('.lambda-result-box');
+      const iconEl = ws.querySelector('.lambda-status-icon');
+      const titleEl = ws.querySelector('.lambda-status-title');
+      const headerBadgeEl = ws.querySelector('.lambda-header-badge');
+      const badgeEl = ws.querySelector('.lambda-status-badge');
+      const durEl = ws.querySelector('.lambda-duration-tag');
+      const bodyPre = ws.querySelector('.lambda-response-pre');
 
       try {
         const res = await proxyRequest({
-          url: fn.url,
+          url: targetUrl,
           method: 'POST',
           body: reqBody
         });
 
-        const isSuccess = res.statusCode >= 200 && res.statusCode < 300;
+        const statusCode = Number(res.statusCode) || 200;
+        const isSuccess = statusCode >= 200 && statusCode < 300;
+        const statusText = getHttpStatusText(statusCode);
+        const badgeLabel = `${statusCode} ${statusText}`;
 
         if (resultBox) {
           resultBox.classList.remove('hidden', 'lambda-test-success', 'lambda-test-fail');
@@ -791,24 +986,35 @@ export const FunctionsManager = {
 
         if (iconEl) iconEl.textContent = isSuccess ? '✔' : '✖';
         if (titleEl) titleEl.textContent = isSuccess ? 'Yürütme işlevi: başarılı' : 'Yürütme işlevi: başarısız';
-        if (badgeEl) {
-          badgeEl.textContent = `${res.statusCode} ${isSuccess ? 'OK' : 'Error'}`;
-          badgeEl.className = `badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
+        
+        if (headerBadgeEl) {
+          headerBadgeEl.textContent = badgeLabel;
+          headerBadgeEl.className = `badge lambda-header-badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
         }
-        if (durEl) durEl.textContent = `${res.durationMs} ms`;
+        if (badgeEl) {
+          badgeEl.textContent = badgeLabel;
+          badgeEl.className = `badge lambda-status-badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
+        }
+        if (durEl) durEl.textContent = `${res.durationMs || 0} ms`;
+
+        // Format response payload cleanly (auto-parse nested JSON strings if present)
         if (bodyPre) {
-          bodyPre.textContent = typeof res.body === 'object' ? JSON.stringify(res.body, null, 2) : String(res.body);
+          let formattedContent = res.body;
+          if (typeof res.body === 'string') {
+            try {
+              formattedContent = JSON.parse(res.body);
+            } catch {
+              formattedContent = res.body;
+            }
+          }
+          bodyPre.textContent = typeof formattedContent === 'object' && formattedContent !== null
+            ? JSON.stringify(formattedContent, null, 2)
+            : String(formattedContent ?? '');
         }
 
         // Ensure details are visible on new test run
         toggleBtn?.classList.add('open');
         detailsBody?.classList.remove('hidden');
-
-        if (isSuccess) {
-          Toast.success(`Test başarılı (${res.durationMs}ms)`);
-        } else {
-          Toast.error(`Test başarısız (${res.statusCode})`);
-        }
       } catch (err) {
         if (resultBox) {
           resultBox.classList.remove('hidden', 'lambda-test-success');
@@ -816,9 +1022,13 @@ export const FunctionsManager = {
         }
         if (iconEl) iconEl.textContent = '✖';
         if (titleEl) titleEl.textContent = 'Yürütme işlevi: başarısız';
+        if (headerBadgeEl) {
+          headerBadgeEl.textContent = '500 Internal Server Error';
+          headerBadgeEl.className = 'badge lambda-header-badge badge-not-ready';
+        }
         if (badgeEl) {
-          badgeEl.textContent = '500 Error';
-          badgeEl.className = 'badge badge-not-ready';
+          badgeEl.textContent = '500 Internal Server Error';
+          badgeEl.className = 'badge lambda-status-badge badge-not-ready';
         }
         if (durEl) durEl.textContent = '0 ms';
         if (bodyPre) {
@@ -827,24 +1037,71 @@ export const FunctionsManager = {
 
         toggleBtn?.classList.add('open');
         detailsBody?.classList.remove('hidden');
-        Toast.error(`Test hatası: ${err.message}`);
       } finally {
         testBtn.disabled = false;
         testBtn.innerHTML = defaultBtnHtml;
       }
-    });
+    };
   },
 
-  async loadLogs(fnName) {
+  async setupMonitorTab(fn) {
+    const fnName = fn.name;
     const ws = this.workspaceContainer;
-    const logsTerminal = ws?.querySelector(`#logs-terminal-${fnName}`);
+
+    if (!fn.deployed && !fn.ready) {
+      const logsTerminal = ws?.querySelector('.logs-terminal');
+      if (logsTerminal) {
+        logsTerminal.innerHTML = `
+          <div class="empty-state tab-empty-state">
+            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+              <line x1="6" y1="8" x2="10" y2="8"></line>
+              <line x1="6" y1="11" x2="14" y2="11"></line>
+            </svg>
+            <h4 class="empty-state-title">Pod Logu Bulunmuyor</h4>
+            <p class="text-muted">Bu fonksiyon henüz Kubernetes cluster'a deploy edilmedi. Kod sekmesinden "Deploy" butonuna basarak ilk dağıtımı başlatabilirsiniz.</p>
+          </div>
+        `;
+      }
+      return;
+    }
+
+    this.loadLogs(fnName, 100);
+  },
+
+  async loadLogs(fnName, tail = 100) {
+    const ws = this.workspaceContainer;
+    const logsTerminal = ws?.querySelector('.logs-terminal');
     if (!logsTerminal) return;
 
+    if (!this._lastLogContent || this._lastLogFnName !== fnName) {
+      logsTerminal.innerHTML = `<div class="text-muted" style="text-align: center; padding: 2rem;">Loglar yükleniyor...</div>`;
+    }
+
     try {
-      const data = await getFunctionLogs(fnName, 50);
+      const data = await getFunctionLogs(fnName, tail);
       const logs = data.logs || [];
+      const newContent = logs.join('\n');
+
+      if (newContent === this._lastLogContent && this._lastLogFnName === fnName) {
+        return;
+      }
+      this._lastLogContent = newContent;
+      this._lastLogFnName = fnName;
+
       if (logs.length === 0) {
-        logsTerminal.innerHTML = `<div class="text-muted">Kayıtlı log bulunmuyor.</div>`;
+        logsTerminal.innerHTML = `
+          <div class="empty-state tab-empty-state">
+            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+              <polyline points="4 17 10 11 4 5"></polyline>
+              <line x1="12" y1="19" x2="20" y2="19"></line>
+            </svg>
+            <h4 class="empty-state-title">Aktif Pod Logu Yok</h4>
+            <p class="text-muted">${escapeHtml(data.message || 'Kayıtlı pod logu bulunmuyor. Fonksiyon inaktif veya 0 pod durumuna ölçeklenmiş olabilir. Test sekmesinden istek atarak podu uyandırabilirsiniz.')}</p>
+          </div>
+        `;
         return;
       }
       logsTerminal.innerHTML = logs
@@ -852,22 +1109,57 @@ export const FunctionsManager = {
         .join('');
       logsTerminal.scrollTop = logsTerminal.scrollHeight;
     } catch (err) {
-      logsTerminal.innerHTML = `<div class="log-line text-danger">Loglar alınamadı: ${escapeHtml(err.message)}</div>`;
+      logsTerminal.innerHTML = `<div class="log-line text-danger" style="text-align: center; padding: 2rem;">Loglar alınamadı: ${escapeHtml(err.message)}</div>`;
     }
+  },
+
+  refreshActiveRevisions() {
+    if (!this.activeFunctionName || !this.workspaceContainer) return;
+    const revisionsPane = this.workspaceContainer.querySelector('.panel-tab-content[data-content-tab="revisions"]');
+    if (!revisionsPane) return;
+    const fn = this.functionsData.find(f => f.name === this.activeFunctionName);
+    if (fn) this.setupRevisionsTab(fn);
   },
 
   async setupRevisionsTab(fn) {
     const fnName = fn.name;
     const ws = this.workspaceContainer;
-    const revisionsContainer = ws?.querySelector(`#revisions-list-${fnName}`);
+    const revisionsContainer = ws?.querySelector('.revisions-wrapper');
     if (!revisionsContainer) return;
+
+    const renderEmptyState = () => {
+      revisionsContainer.innerHTML = `
+        <div class="empty-state tab-empty-state">
+          <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+          <h4 class="empty-state-title">Henüz Sürüm Geçmişi Yok</h4>
+          <p class="text-muted">Bu fonksiyona ait dağıtılmış geçmiş bir revizyon kaydı bulunmuyor. Kod sekmesinden yeni bir dağıtım (deploy) başlatabilirsiniz.</p>
+        </div>
+      `;
+    };
+
+    if (fn.isDraft || !fn.url || fn.url === 'Henüz Deploy Edilmedi') {
+      renderEmptyState();
+      return;
+    }
+
+    // Show centered loading spinner while fetching
+    revisionsContainer.innerHTML = `
+      <div class="tab-loading-state">
+        <div class="tab-loading-spinner"></div>
+        <span>Sürümler yükleniyor...</span>
+      </div>
+    `;
 
     try {
       const res = await getFunctionRevisions(fnName);
       const revisions = res.revisions || [];
 
       if (revisions.length === 0) {
-        revisionsContainer.innerHTML = `<div class="text-muted p-3">Henüz sürüm geçmişi bulunmuyor.</div>`;
+        renderEmptyState();
         return;
       }
 
@@ -886,21 +1178,37 @@ export const FunctionsManager = {
 
       revisions.forEach(rev => {
         const isActive = rev.is_active;
+
+        // Tri-state status badge
+        let statusBadge = '';
+        if (isActive) {
+          statusBadge = '<span class="badge badge-active">✅ Aktif</span>';
+        } else if (rev.is_ready === true) {
+          statusBadge = '<span class="badge badge-passive">✔ Hazır</span>';
+        } else if (rev.is_ready === false) {
+          statusBadge = '<span class="badge badge-not-ready">❌ Hatalı</span>';
+        } else {
+          statusBadge = '<span class="badge badge-deploying"><span class="pulse-dot"></span> Hazırlanıyor</span>';
+        }
+
+        let rollbackBtn = '';
+        if (isActive) {
+          rollbackBtn = `<button class="btn btn-secondary btn-xs btn-rollback" disabled title="Bu sürüm zaten aktif">Rollback</button>`;
+        } else if (rev.is_ready === false) {
+          rollbackBtn = `<button class="btn btn-secondary btn-xs btn-rollback" disabled title="Hatalı sürüme rollback yapılamaz">Rollback</button>`;
+        } else {
+          rollbackBtn = `<button class="btn btn-secondary btn-xs btn-rollback" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Rollback</button>`;
+        }
+
+        const loadCodeBtn = `<button class="btn btn-secondary btn-xs btn-load-code" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Kodu Yükle</button>`;
+        const actionButtons = `<div style="display: inline-flex; gap: 0.4rem; align-items: center;">${rollbackBtn}${loadCodeBtn}</div>`;
+
         rows += `
           <tr>
             <td><code class="revision-code">${escapeHtml(rev.name)}</code></td>
             <td>${formatDate(rev.created_at)}</td>
-            <td>
-              ${isActive
-                ? '<span class="badge badge-active">✅ Aktif</span>'
-                : '<span class="badge badge-passive">⬜ Pasif</span>'}
-            </td>
-            <td>
-              ${!isActive ? `
-                <button class="btn btn-secondary btn-xs btn-rollback" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Rollback</button>
-                <button class="btn btn-secondary btn-xs btn-load-code" data-fn="${escapeHtml(fnName)}" data-rev="${escapeHtml(rev.name)}">Kodu Yükle</button>
-              ` : '—'}
-            </td>
+            <td>${statusBadge}</td>
+            <td>${actionButtons}</td>
           </tr>
         `;
       });
@@ -923,7 +1231,13 @@ export const FunctionsManager = {
             try {
               const rbRes = await rollbackRevision(fnName, rName);
               Toast.success(rbRes.message || 'Rollback tamamlandı.');
-              this.setupRevisionsTab(fn);
+              
+              // Invalidate session cache so editor can pull rolled back code
+              this.sessionCache.delete(fnName);
+
+              // Immediately re-fetch and re-render revisions
+              await this.setupRevisionsTab(fn);
+              await this.loadFunctions(true);
             } catch (err) {
               Toast.error(`Rollback başarısız: ${err.message}`);
             }
@@ -931,15 +1245,31 @@ export const FunctionsManager = {
         });
       });
 
-      // Bind Load Code
+      // Bind Load Code (with confirmation modal)
       revisionsContainer.querySelectorAll('.btn-load-code').forEach(btn => {
         btn.addEventListener('click', async () => {
           const rName = btn.getAttribute('data-rev');
+
+          const confirmed = await Modal.confirm({
+            title: 'Sürüm Kodunu Yükle',
+            message: 'Bu sürümün kodunu editöre yüklemek istediğinize emin misiniz? Editördeki mevcut ve henüz deploy edilmemiş değişiklikleriniz kaybolacaktır.',
+            confirmText: 'Kodu Yükle',
+            type: 'primary'
+          });
+
+          if (!confirmed) return;
+
           try {
             const revCodeRes = await getRevisionCode(fnName, rName);
-            const editor = getEditor(`editor-main-${fnName}`);
-            if (editor && revCodeRes && revCodeRes.code) {
-              editor.setValue(revCodeRes.code);
+            if (revCodeRes && revCodeRes.code) {
+              const session = this.getSession(fnName);
+              session.code = revCodeRes.code;
+
+              const editor = getEditor(`editor-main-${fnName}`);
+              if (editor) {
+                editor.setValue(revCodeRes.code);
+              }
+
               Toast.success(`'${rName}' sürümünün kodu editöre yüklendi.`);
 
               // Switch to Code Tab
@@ -953,6 +1283,24 @@ export const FunctionsManager = {
       });
     } catch (err) {
       revisionsContainer.innerHTML = `<div class="text-danger p-3">Sürümler yüklenemedi: ${escapeHtml(err.message)}</div>`;
+    }
+  },
+
+  _updateUrlDisplay(urlTextEl, fn) {
+    if (!urlTextEl) return;
+    const isDeployed = fn.deployed || fn.ready;
+    const hasUrl = fn.url && fn.url.startsWith('http');
+
+    if (isDeployed && hasUrl) {
+      urlTextEl.textContent = fn.url;
+      urlTextEl.href = fn.url;
+      urlTextEl.title = `Yeni sekmede aç: ${fn.url}`;
+      urlTextEl.classList.remove('url-disabled');
+    } else {
+      urlTextEl.textContent = 'Henüz Deploy Edilmedi';
+      urlTextEl.removeAttribute('href');
+      urlTextEl.title = 'Fonksiyon henüz cluster\'a deploy edilmedi';
+      urlTextEl.classList.add('url-disabled');
     }
   }
 };

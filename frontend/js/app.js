@@ -2,18 +2,26 @@
  * Main application bootstrap and event bindings for FaaS Platform.
  */
 
-import { ThemeManager } from './theme.js?v=2.5';
-import { FunctionsManager } from './functions.js?v=2.5';
-import { initMonaco } from './editor.js?v=2.5';
-import { getHealth, DEFAULT_TEMPLATE_CODE, deployFunctionStream } from './api.js?v=2.5';
-import { Toast, validateFunctionName } from './utils.js?v=2.5';
+import { ThemeManager } from './theme.js';
+import { FunctionsManager } from './functions.js';
+import { initMonaco } from './editor.js';
+import { getHealth, DEFAULT_TEMPLATE_CODE, deployFunctionStream, createDraftFunction } from './api.js';
+import { Toast, validateFunctionName } from './utils.js';
+
 
 class App {
   constructor() {
     this.pollingInterval = null;
   }
 
+
   async init() {
+    // Start page at the top on initial load/refresh
+    if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+    }
+    window.scrollTo(0, 0);
+
     // 1. Initialize theme
     ThemeManager.init();
 
@@ -46,10 +54,14 @@ class App {
 
     try {
       const res = await getHealth();
-      if (res && res.status === 'ok') {
+      if (res && (res.status === 'ok' || res.status === 'healthy')) {
         if (healthDot) healthDot.className = 'status-dot dot-green';
         if (healthText) healthText.textContent = 'All Systems Operational';
-        healthBadge?.setAttribute('title', 'Sistem düzgün çalışıyor');
+        healthBadge?.setAttribute('title', res.timestamp ? `Sistem çalışıyor (${new Date(res.timestamp).toLocaleTimeString('tr-TR')})` : 'Sistem düzgün çalışıyor');
+      } else if (res && res.status === 'degraded') {
+        if (healthDot) healthDot.className = 'status-dot dot-yellow';
+        if (healthText) healthText.textContent = 'System Degraded';
+        healthBadge?.setAttribute('title', 'Backend çalışıyor, K8s/Redis bağımlılığı bekleniyor');
       } else {
         throw new Error('Unhealthy status');
       }
@@ -103,63 +115,29 @@ class App {
         return;
       }
 
-      // Check if function already exists in local list
-      const existing = FunctionsManager.functionsData.find(f => f.name.toLowerCase() === functionName.toLowerCase());
-      if (existing) {
-        Toast.warning(`'${functionName}' isimli bir fonksiyon zaten mevcut!`);
-        return;
-      }
-
-      // Prepare UI for creation
-      const origBtnHtml = submitBtn.innerHTML;
-      submitBtn.disabled = true;
-      submitBtn.classList.add('loading');
-      submitBtn.innerHTML = `<span class="spinner"></span> <span>İşlem Oluşturuluyor...</span>`;
-
-      // Optimistically push to list in Deploying state
-      FunctionsManager.functionsData.unshift({
-        name: functionName,
-        url: `http://${functionName}.tenant-functions.svc.cluster.local`,
-        ready: false,
-        deploying: true,
-        created_at: new Date().toISOString(),
-        runtime: runtimeSelect?.value || 'python',
-        namespace: 'tenant-functions'
-      });
-      FunctionsManager.renderList();
-
       try {
-        Toast.info(`'${functionName}' deploy ediliyor...`);
+        await createDraftFunction({
+          name: functionName,
+          runtime: runtimeSelect?.value || 'python'
+        });
 
-        await deployFunctionStream(
-          functionName,
-          DEFAULT_TEMPLATE_CODE,
-          false,
-          {},
-          () => {}
-        );
-
-        Toast.success(`'${functionName}' başarıyla oluşturuldu ve hazır!`);
         nameInput.value = '';
         nameInput.classList.remove('input-valid');
         if (validationHint) validationHint.textContent = '';
 
-        // Reload data and automatically select the new function
-        await FunctionsManager.loadFunctions(true);
-        setTimeout(() => {
-          FunctionsManager.selectFunction(functionName);
-        }, 100);
+        // Record activity so newly created function is top-most
+        FunctionsManager.recordActivity(functionName);
 
-      } catch (err) {
-        Toast.error(`Fonksiyon oluşturulamadı: ${err.message}`);
+        // Reload data from store and select the new function with smooth scroll
         await FunctionsManager.loadFunctions(true);
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.classList.remove('loading');
-        submitBtn.innerHTML = origBtnHtml;
+        FunctionsManager.selectFunction(functionName, true);
+      } catch (err) {
+        Toast.error(err.message || 'Fonksiyon oluşturulamadı.');
       }
     });
   }
+
+
 
   startPolling() {
     if (this.pollingInterval) clearInterval(this.pollingInterval);

@@ -1,0 +1,166 @@
+# ============================================================
+#  VaaF/k8s/deployment.yaml
+#  VaaF Platform API — Deployment, Service, ConfigMap
+#
+#  Namespace: vaaf-platform
+#  Exposes the FastAPI orchestrator on NodePort 30082
+# ============================================================
+
+# ── ConfigMap: Platform configuration ────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vaaf-platform-config
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-platform-api
+data:
+  # Registry prefix for base runtime images
+  REGISTRY_PREFIX: "docker.io/soodee"
+
+  # Base runtime image used for all Python functions
+  BASE_RUNTIME_IMAGE: "docker.io/soodee/faas-python-runtime:latest"
+
+  # Kubernetes namespace where user functions are deployed
+  TENANT_NAMESPACE: "vaaf-functions"
+
+  # Deploy timeout in seconds (60s is plenty for ConfigMap + Knative)
+  DEPLOY_TIMEOUT_SECONDS: "60"
+
+  # FastAPI log level
+  LOG_LEVEL: "info"
+
+  # In-cluster Redis backing the shared deploy-job store
+  REDIS_URL: "redis://vaaf-redis.vaaf-platform.svc.cluster.local:6379/0"
+
+---
+# ── Deployment: FastAPI VaaF Orchestrator ────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vaaf-platform-api
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-platform-api
+    version: "latest"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vaaf-platform-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: vaaf-platform-api
+    spec:
+      serviceAccountName: vaaf-orchestrator
+
+      containers:
+        - name: vaaf-platform-api
+          image: soodee/vaaf-platform-api:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          env:
+            - name: REGISTRY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: vaaf-platform-config
+                  key: REGISTRY_PREFIX
+            - name: BASE_RUNTIME_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: vaaf-platform-config
+                  key: BASE_RUNTIME_IMAGE
+            - name: TENANT_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: vaaf-platform-config
+                  key: TENANT_NAMESPACE
+            - name: DEPLOY_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: vaaf-platform-config
+                  key: DEPLOY_TIMEOUT_SECONDS
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: vaaf-platform-config
+                  key: LOG_LEVEL
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: vaaf-platform-config
+                  key: REDIS_URL
+            # Expose pod identity for structured logging
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+
+          lifecycle:
+            preStop:
+              exec:
+                # Graceful shutdown — allow in-flight requests to complete
+                command: ["/bin/sh", "-c", "sleep 5"]
+
+      terminationGracePeriodSeconds: 30
+
+---
+# ── Service: Expose FastAPI on NodePort 30082 ────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaaf-platform-service
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-platform-api
+spec:
+  type: NodePort
+  selector:
+    app: vaaf-platform-api
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 30082

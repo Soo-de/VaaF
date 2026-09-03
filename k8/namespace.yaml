@@ -1,0 +1,124 @@
+# ============================================================
+#  VaaF/k8s/namespace.yaml
+#  Namespaces, RBAC, and ResourceQuota for VaaF Platform
+# ============================================================
+
+# ── Namespace: vaaf-platform ──────────────────────────────────────────────────
+# Hosts the FastAPI orchestrator, frontend, and Redis
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vaaf-platform
+  labels:
+    app.kubernetes.io/managed-by: "vaaf-platform"
+    environment: "production"
+
+---
+# ── Namespace: vaaf-functions ─────────────────────────────────────────────────
+# Strictly isolated namespace for user-deployed Knative functions.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vaaf-functions
+  labels:
+    app.kubernetes.io/managed-by: "vaaf-platform"
+    purpose: "tenant-isolation"
+    # Required by Knative Serving for function deployments
+    knative.dev/serving: "true"
+
+---
+# ── ResourceQuota: vaaf-functions ─────────────────────────────────────────────
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: vaaf-functions-quota
+  namespace: vaaf-functions
+spec:
+  hard:
+    pods:                "100"
+    services:            "100"
+    requests.cpu:        "10"
+    requests.memory:     "16Gi"
+    limits.cpu:          "20"
+    limits.memory:       "32Gi"
+
+---
+# ── ServiceAccount for FastAPI Orchestrator ───────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vaaf-orchestrator
+  namespace: vaaf-platform
+  labels:
+    app: vaaf-platform-api
+
+---
+# ── ClusterRole: Manage Knative Services & ConfigMaps in vaaf-functions ───────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vaaf-orchestrator-role
+  labels:
+    app: vaaf-platform-api
+rules:
+  # Knative Serving — Services (ksvc), Revisions, Routes
+  - apiGroups: ["serving.knative.dev"]
+    resources: ["services", "revisions", "routes", "configurations"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Core — ConfigMaps (function code storage)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Core — Pods and Logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+  # Core — Events (to catch errors)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+  # Core — Namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+
+  # Core — Secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+
+  # Core — Services (Kubernetes Services)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+
+  # Apps — Deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+
+  # CRDs check (Knative health check)
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
+
+---
+# ── ClusterRoleBinding: Bind role to the ServiceAccount ──────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vaaf-orchestrator-binding
+  labels:
+    app: vaaf-platform-api
+subjects:
+  - kind: ServiceAccount
+    name: vaaf-orchestrator
+    namespace: vaaf-platform
+roleRef:
+  kind: ClusterRole
+  name: vaaf-orchestrator-role
+  apiGroup: rbac.authorization.k8s.io
