@@ -33,17 +33,6 @@ async def deploy_function(
     """
     target_namespace = resolve_namespace(x_department)
 
-    # Check existence scoped by user identity
-    if not req.is_update:
-        exists = await asyncio.to_thread(
-            service_exists, req.name, target_namespace, x_user_id
-        )
-        if exists:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Function '{req.name}' already exists. Please choose a different name or use Update mode.",
-            )
-
     job_id = str(uuid.uuid4())[:8]
     active_user = x_user_id or "anonymous"
 

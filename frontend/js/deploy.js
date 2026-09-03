@@ -2,8 +2,8 @@
  * Deploy flow manager, handling SSE streaming output and console logging.
  */
 
-import { deployFunctionStream } from './api.js?v=3.0';
-import { Toast, escapeHtml } from './utils.js?v=3.0';
+import { deployFunctionStream } from './api.js';
+import { Toast, escapeHtml } from './utils.js';
 
 
 export const DeployManager = {
@@ -16,9 +16,10 @@ export const DeployManager = {
    * @param {Object} [params.envVars={}]
    * @param {HTMLElement} params.consoleElement
    * @param {HTMLButtonElement} params.deployBtn
-   * @param {function(): void} [params.onComplete]
+   * @param {function(Object=): void} [params.onComplete]
+   * @param {function(Error=): void} [params.onError]
    */
-  async runDeploy({ functionName, code, isUpdate = false, envVars = {}, consoleElement, deployBtn, onComplete }) {
+  async runDeploy({ functionName, code, isUpdate = false, envVars = {}, consoleElement, deployBtn, onComplete, onError }) {
     if (!consoleElement) return;
 
     // Show console container if hidden
@@ -82,11 +83,13 @@ export const DeployManager = {
             appendLog('url', data);
           } else if (eventType === 'done') {
             let status = 'success';
+            let detail = data;
             try {
               const parsed = JSON.parse(data);
               status = parsed.status || 'success';
+              detail = parsed.detail || parsed.error || data;
             } catch {
-              // ignore
+              detail = data;
             }
 
             if (status === 'success') {
@@ -97,8 +100,9 @@ export const DeployManager = {
               consoleBody.scrollTop = consoleBody.scrollHeight;
               Toast.success(`'${functionName}' başarıyla deploy edildi!`);
             } else {
-              appendLog('error', `Deploy tamamlanamadı: ${data}`);
+              appendLog('error', `Deploy tamamlanamadı: ${detail}`);
               Toast.error(`'${functionName}' deploy edilirken hata oluştu.`);
+              if (onError) onError(new Error(detail));
             }
           }
         }
@@ -108,10 +112,11 @@ export const DeployManager = {
     } catch (err) {
       appendLog('error', `Deploy Hatası: ${err.message}`);
       Toast.error(`Deploy başarısız: ${err.message}`);
+      if (onError) onError(err);
     } finally {
       if (deployBtn) {
-        deployBtn.disabled = false;
         deployBtn.classList.remove('loading');
+        deployBtn.disabled = false;
         deployBtn.innerHTML = originalBtnHtml;
       }
     }

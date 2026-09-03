@@ -39,7 +39,8 @@ const DRAFT_STORAGE_KEY = 'faas_drafts';
 export function getLocalDrafts() {
   try {
     const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(d => d && typeof d.name === 'string' && d.name.trim().length > 0) : [];
   } catch {
     return [];
   }
@@ -47,6 +48,7 @@ export function getLocalDrafts() {
 
 export function saveLocalDraft(draft) {
   try {
+    if (!draft || !draft.name) return;
     const drafts = getLocalDrafts().filter(d => d.name !== draft.name);
     drafts.unshift(draft);
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
@@ -55,6 +57,7 @@ export function saveLocalDraft(draft) {
 
 export function removeLocalDraft(name) {
   try {
+    if (!name) return;
     const drafts = getLocalDrafts().filter(d => d.name !== name);
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
   } catch {}
@@ -198,33 +201,45 @@ export async function getFunctions() {
   const drafts = getLocalDrafts();
 
   if (USE_MOCK) {
-    const store = getMockStore();
+    const mockFunctions = getMockStore().functions;
+    const unDeployedDrafts = drafts.filter(
+      d => !mockFunctions.some(mf => mf.name === d.name)
+    );
     return {
-      functions: store.functions.map(f => ({
-        name: f.name,
-        url: f.url,
-        ready: f.ready,
-        deployed: f.deployed ?? f.ready,
-        created_at: f.created_at,
-        runtime: f.runtime,
-        namespace: f.namespace
-      })),
+      functions: [...unDeployedDrafts, ...mockFunctions],
       namespace: "vaaf-functions"
     };
   }
 
-  const res = await apiFetch("/functions");
-  if (!res.ok) throw new Error(`Failed to fetch functions: ${res.status}`);
-  const data = await res.json();
-  const liveFunctions = data.functions || [];
+  try {
+    const res = await apiFetch("/functions");
+    if (!res.ok) {
+      console.warn(`[getFunctions] Backend returned HTTP ${res.status}, displaying local drafts.`);
+      return {
+        functions: drafts,
+        namespace: "vaaf-functions"
+      };
+    }
 
-  // Merge un-deployed local drafts at the top
-  const unDeployedDrafts = drafts.filter(d => !liveFunctions.some(lf => lf.name === d.name));
+    const data = await res.json();
+    const liveFunctions = data.functions || [];
 
-  return {
-    functions: [...unDeployedDrafts, ...liveFunctions],
-    namespace: data.namespace || "vaaf-functions"
-  };
+    // Merge un-deployed local drafts at the top
+    const unDeployedDrafts = drafts.filter(
+      d => !liveFunctions.some(lf => lf.name === d.name)
+    );
+
+    return {
+      functions: [...unDeployedDrafts, ...liveFunctions],
+      namespace: data.namespace || "vaaf-functions"
+    };
+  } catch (err) {
+    console.warn(`[getFunctions] Network/Cluster unavailable (${err.message}), displaying local drafts.`);
+    return {
+      functions: drafts,
+      namespace: "vaaf-functions"
+    };
+  }
 }
 
 /**
@@ -235,86 +250,86 @@ export async function getFunctions() {
  */
 export async function getFunctionCode(name) {
   // Check local draft first
-  const draft = getLocalDrafts().find(d => d.name === name);
-  if (draft) {
+  const drafts = getLocalDrafts();
+  const draft = drafts.find(d => d.name === name);
+  if (draft && draft.code) {
     return {
-      name,
-      language: "python",
-      code: draft.code || DEFAULT_TEMPLATE_CODE,
-      environment: draft.environment || draft.env || {}
+      name: draft.name,
+      language: draft.language || "python",
+      code: draft.code,
+      environment: draft.environment || {}
     };
   }
 
   if (USE_MOCK) {
-    const store = getMockStore();
-    const fn = store.functions.find(f => f.name === name);
+    const fn = getMockStore().functions.find(f => f.name === name);
     return {
-      name,
-      language: "python",
-      code: fn?.code || DEFAULT_TEMPLATE_CODE,
-      environment: fn?.environment || fn?.env || {}
+      name: name,
+      language: fn?.runtime || "python",
+      code: fn?.code || 'def handler(event, context):\n    return {"message": "Hello"}\n',
+      environment: fn?.environment || {}
     };
   }
 
   const res = await apiFetch(`/functions/${encodeURIComponent(name)}/code`);
-  if (!res.ok) throw new Error(`Failed to fetch code for ${name}: ${res.status}`);
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.detail || `Failed to fetch code for ${name}: ${res.status}`);
+  }
   return res.json();
 }
 
-
 /**
- * Retrieve revisions list for a specific function.
+ * Retrieve revision history for a function.
  * @param {string} name
- * @returns {Promise<{ function_name: string, revisions: Array<Object> }>}
+ * @returns {Promise<{ revisions: Array<Object>, active_revision: string }>}
  */
 export async function getFunctionRevisions(name) {
   if (USE_MOCK) {
-    const store = getMockStore();
-    const fn = store.functions.find(f => f.name === name);
+    const fn = getMockStore().functions.find(f => f.name === name);
     return {
-      function_name: name,
-      revisions: fn?.revisions || [
-        {
-          name: `${name}-00001`,
-          created_at: new Date().toISOString(),
-          is_active: true,
-          has_code: true
-        }
-      ]
+      revisions: fn?.revisions || [],
+      active_revision: fn?.revisions?.find(r => r.is_active)?.name || ""
     };
   }
 
   const res = await apiFetch(`/functions/${encodeURIComponent(name)}/revisions`);
-  if (!res.ok) throw new Error(`Failed to fetch revisions for ${name}: ${res.status}`);
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.detail || `Failed to fetch revisions for ${name}: ${res.status}`);
+  }
   return res.json();
 }
 
 /**
- * Retrieve code for a specific revision of a function.
+ * Retrieve source code for a specific historical revision.
  * @param {string} name
  * @param {string} revisionName
- * @returns {Promise<{ name: string, revision_name: string, language: string, code: string }>}
+ * @returns {Promise<{ name: string, revision: string, code: string }>}
  */
 export async function getRevisionCode(name, revisionName) {
   if (USE_MOCK) {
-    const store = getMockStore();
-    const fn = store.functions.find(f => f.name === name);
+    const fn = getMockStore().functions.find(f => f.name === name);
     const rev = fn?.revisions?.find(r => r.name === revisionName);
     return {
-      name,
-      revision_name: revisionName,
-      language: "python",
-      code: rev?.code || `# Code snapshot for ${revisionName}\n` + DEFAULT_TEMPLATE_CODE
+      name: name,
+      revision: revisionName,
+      code: rev?.code || fn?.code || ""
     };
   }
 
-  const res = await apiFetch(`/functions/${encodeURIComponent(name)}/revision/${encodeURIComponent(revisionName)}/code`);
-  if (!res.ok) throw new Error(`Failed to fetch code for revision ${revisionName}: ${res.status}`);
+  const res = await apiFetch(
+    `/functions/${encodeURIComponent(name)}/revisions/${encodeURIComponent(revisionName)}/code`
+  );
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.detail || `Failed to fetch code for revision ${revisionName}: ${res.status}`);
+  }
   return res.json();
 }
 
 /**
- * Rollback function traffic to a target revision.
+ * Rollback function traffic to a specific revision.
  * @param {string} name
  * @param {string} revisionName
  * @returns {Promise<{ status: string, message: string }>}
@@ -343,7 +358,10 @@ export async function rollbackRevision(name, revisionName) {
     method: "POST",
     body: JSON.stringify({ revision_name: revisionName })
   });
-  if (!res.ok) throw new Error(`Rollback failed: ${res.status}`);
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.detail || `Rollback failed: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -368,35 +386,37 @@ export async function deleteFunction(name) {
   const res = await apiFetch(`/functions/${encodeURIComponent(name)}`, {
     method: "DELETE"
   });
-  if (!res.ok) throw new Error(`Failed to delete function ${name}: ${res.status}`);
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.detail || `Failed to delete function ${name}: ${res.status}`);
+  }
   return res.json();
 }
 
 
 /**
- * Retrieve execution logs for a function.
+ * Fetch pod stdout/stderr logs for a function.
  * @param {string} name
  * @param {number} [tail=50]
- * @returns {Promise<{ function_name: string, logs: Array<string> }>}
+ * @returns {Promise<{ name: string, logs: Array<string> }>}
  */
 export async function getFunctionLogs(name, tail = 50) {
   if (USE_MOCK) {
-    const now = new Date().toLocaleTimeString('tr-TR');
     return {
-      function_name: name,
+      name: name,
       logs: [
-        `[${now}] FaaS Runtime başlatıldı (Python 3.11)`,
-        `[${now}] Handler: /var/task/handler.py`,
-        `[${now}] ✅ Handler başarıyla yüklendi`,
-        `[${now}] 🚀 8080 portu dinleniyor...`,
-        `[${now}] [req-001] POST / → 200 OK (38.4ms)`,
-        `[${now}] [req-002] POST / → 200 OK (22.1ms)`
+        `[${new Date().toISOString()}] FaaS Python Runtime starting...`,
+        `[${new Date().toISOString()}] Handler loaded successfully.`,
+        `[${new Date().toISOString()}] Server listening on port 8080.`
       ]
     };
   }
 
   const res = await apiFetch(`/logs/${encodeURIComponent(name)}?tail=${tail}`);
-  if (!res.ok) throw new Error(`Failed to fetch logs for ${name}: ${res.status}`);
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    throw new Error(errJson.detail || `Failed to fetch logs for ${name}: ${res.status}`);
+  }
   return res.json();
 }
 

@@ -132,7 +132,7 @@ def apply_knative_service(
 def get_ksvc_ready_url(
     name: str, namespace: str = TENANT_NAMESPACE
 ) -> Optional[str]:
-    """Return the function URL once the Knative Service status is Ready=True."""
+    """Return the function URL once Knative Service has fully reconciled the newest revision and Ready=True."""
     result = kubectl(
         "get",
         "ksvc",
@@ -140,10 +140,85 @@ def get_ksvc_ready_url(
         "-n",
         namespace,
         "-o",
-        "jsonpath={.status.conditions[?(@.type=='Ready')].status} {.status.url}",
+        "json",
+        timeout=10,
     )
-    parts = result.stdout.split()
-    return parts[1] if len(parts) == 2 and parts[0] == "True" else None
+    if result.returncode != 0:
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+        meta_gen = data.get("metadata", {}).get("generation", 0)
+        status = data.get("status", {})
+        obs_gen = status.get("observedGeneration", -1)
+
+        # 1. Controller must have observed the latest applied generation
+        if obs_gen < meta_gen:
+            return None
+
+        # 2. Latest created revision must match latest ready revision
+        latest_created = status.get("latestCreatedRevisionName")
+        latest_ready = status.get("latestReadyRevisionName")
+        if not latest_created or latest_created != latest_ready:
+            return None
+
+        # 3. Overall Ready condition must be True
+        conditions = status.get("conditions", [])
+        is_ready = any(
+            c.get("type") == "Ready" and c.get("status") == "True"
+            for c in conditions
+        )
+        if not is_ready:
+            return None
+
+        return status.get("url")
+    except Exception:
+        return None
+
+
+def get_ksvc_failure_reason(
+    name: str, namespace: str = TENANT_NAMESPACE
+) -> Optional[str]:
+    """Check if the latest revision or service has failed to start."""
+    # 1. Check Knative Revision status (Ready == False indicates a definitive failure)
+    result = kubectl(
+        "get",
+        "revision",
+        "-n",
+        namespace,
+        "-l",
+        f"serving.knative.dev/service={name}",
+        "--sort-by=.metadata.creationTimestamp",
+        "-o",
+        "json",
+        timeout=10,
+    )
+    if result.returncode == 0:
+        try:
+            data = json.loads(result.stdout)
+            items = data.get("items", [])
+            if items:
+                latest = items[-1]
+                conditions = latest.get("status", {}).get("conditions", [])
+                for c in conditions:
+                    if c.get("type") == "Ready" and c.get("status") == "False":
+                        return c.get("message") or f"Container failed to start (Reason: {c.get('reason', 'Failed')})"
+        except Exception:
+            pass
+
+    # 2. Check Knative Service overall condition
+    ksvc_raw = kubectl("get", "ksvc", name, "-n", namespace, "-o", "json", timeout=10)
+    if ksvc_raw.returncode == 0:
+        try:
+            kdata = json.loads(ksvc_raw.stdout)
+            kconds = kdata.get("status", {}).get("conditions", [])
+            for c in kconds:
+                if c.get("type") == "Ready" and c.get("status") == "False":
+                    return c.get("message") or f"Knative Service failed (Reason: {c.get('reason', 'Failed')})"
+        except Exception:
+            pass
+
+    return None
 
 
 def list_ksvc(
@@ -172,14 +247,28 @@ def list_ksvc(
         status = item.get("status", {})
         conditions = status.get("conditions", [])
 
-        ready = next(
-            (
-                c["status"] == "True"
-                for c in conditions
-                if c.get("type") == "Ready"
-            ),
-            False,
+        # Tri-state ready: True / None (unknown/deploying) / False (failed)
+        ready_cond = next(
+            (c for c in conditions if c.get("type") == "Ready"), None
         )
+        if ready_cond is None:
+            ready = None
+        elif ready_cond.get("status") == "True":
+            ready = True
+        elif ready_cond.get("status") == "False":
+            ready = False
+        else:
+            ready = None
+
+        latest_ready_rev = status.get("latestReadyRevisionName", "")
+        has_ready_revision = bool(latest_ready_rev)
+
+        # Last update timestamp from the most recent condition transition
+        updated_at = meta.get("creationTimestamp", "")
+        for c in conditions:
+            ts = c.get("lastTransitionTime", "")
+            if ts > updated_at:
+                updated_at = ts
 
         display_name = labels.get("faas.platform/display-name") or meta.get(
             "name", ""
@@ -191,7 +280,9 @@ def list_ksvc(
                 "service_name": meta.get("name", ""),
                 "url": status.get("url", ""),
                 "ready": ready,
+                "deployed": has_ready_revision,
                 "created_at": meta.get("creationTimestamp", ""),
+                "updated_at": updated_at,
                 "runtime": "python",
                 "namespace": namespace,
                 "user_id": labels.get("faas.platform/user", "default"),
@@ -236,11 +327,23 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
     if ksvc_result.returncode == 0:
         try:
             ksvc_data = json.loads(ksvc_result.stdout)
-            traffic = ksvc_data.get("status", {}).get("traffic", [])
-            for t in traffic:
-                if t.get("percent", 0) == 100:
+            
+            # 1. Check spec.traffic first (immediate rollback / explicit pin)
+            for t in ksvc_data.get("spec", {}).get("traffic", []):
+                if t.get("percent", 0) == 100 and t.get("revisionName"):
                     current_traffic_revision = t.get("revisionName", "")
                     break
+
+            # 2. Fallback to status.traffic
+            if not current_traffic_revision:
+                for t in ksvc_data.get("status", {}).get("traffic", []):
+                    if t.get("percent", 0) == 100 and t.get("revisionName"):
+                        current_traffic_revision = t.get("revisionName", "")
+                        break
+
+            # 3. Fallback to latestReadyRevisionName
+            if not current_traffic_revision:
+                current_traffic_revision = ksvc_data.get("status", {}).get("latestReadyRevisionName", "")
         except Exception:
             pass
 
@@ -267,12 +370,29 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
     revisions = []
     for item in reversed(data.get("items", [])):
         meta = item.get("metadata", {})
+        status = item.get("status", {})
+        conditions = status.get("conditions", [])
+
+        # Tri-state: True (ready), None (unknown/deploying), False (failed)
+        ready_cond = next(
+            (c for c in conditions if c.get("type") == "Ready"), None
+        )
+        if ready_cond is None:
+            is_ready = None
+        elif ready_cond.get("status") == "True":
+            is_ready = True
+        elif ready_cond.get("status") == "False":
+            is_ready = False
+        else:
+            is_ready = None
+
         rev_name = meta.get("name", "")
         revisions.append(
             {
                 "name": rev_name,
                 "created_at": meta.get("creationTimestamp", ""),
                 "is_active": rev_name == current_traffic_revision,
+                "is_ready": is_ready,
                 "has_code": True,
             }
         )
@@ -282,7 +402,24 @@ def get_revisions(name: str, namespace: str = TENANT_NAMESPACE) -> list[dict]:
 def rollback_to_revision(
     service_name: str, revision_name: str, namespace: str = TENANT_NAMESPACE
 ) -> tuple[bool, str]:
-    """Route 100% of traffic to a specific historical revision."""
+    """Route 100% of traffic to a specific historical revision with health guard."""
+    # 1. Guard: Check if target revision is healthy
+    rev_check = kubectl(
+        "get",
+        "revision",
+        revision_name,
+        "-n",
+        namespace,
+        "-o",
+        "jsonpath={.status.conditions[?(@.type=='Ready')].status}",
+        timeout=10,
+    )
+    if rev_check.stdout.strip() != "True":
+        return (
+            False,
+            f"'{revision_name}' sürümü sağlıklı başlatılamadığı (hatalı olduğu) için bu sürüme rollback yapılamaz. Lütfen 'Kodu Yükle' butonu ile kodu inceleyip düzeltin.",
+        )
+
     patch = json.dumps(
         {
             "spec": {
@@ -317,32 +454,55 @@ def prune_old_configmaps(
     max_retained: int = MAX_REVISIONS_RETAINED,
     namespace: str = TENANT_NAMESPACE,
 ) -> None:
-    """Delete older versioned ConfigMaps for a function exceeding max_retained limit."""
-    result = kubectl(
+    """Delete older historical Knative Revisions and ConfigMaps exceeding max_retained limit."""
+    # 1. Prune Knative Revisions
+    rev_result = kubectl(
+        "get",
+        "revisions",
+        "-n",
+        namespace,
+        "-l",
+        f"serving.knative.dev/service={function_name}",
+        "--sort-by=.metadata.creationTimestamp",
+        "-o",
+        "json",
+        timeout=15,
+    )
+    if rev_result.returncode == 0:
+        try:
+            rev_items = json.loads(rev_result.stdout).get("items", [])
+            if len(rev_items) > max_retained:
+                excess_revs = rev_items[:-max_retained]
+                for r in excess_revs:
+                    r_name = r.get("metadata", {}).get("name", "")
+                    if r_name:
+                        logger.info("Pruning old revision: %s", r_name)
+                        kubectl("delete", "revision", r_name, "-n", namespace, "--ignore-not-found=true", timeout=15)
+        except Exception as e:
+            logger.warning("Failed to prune old revisions for %s: %s", function_name, e)
+
+    # 2. Prune ConfigMaps
+    cm_result = kubectl(
         "get",
         "configmaps",
         "-n",
         namespace,
         "-l",
         f"faas.platform/function={function_name}",
+        "--sort-by=.metadata.creationTimestamp",
         "-o",
         "json",
-        "--sort-by=.metadata.creationTimestamp",
         timeout=15,
     )
-    if result.returncode != 0:
-        return
-
-    try:
-        items = json.loads(result.stdout).get("items", [])
-        if len(items) > max_retained:
-            excess = len(items) - max_retained
-            for cm in items[:excess]:
-                cm_name = cm.get("metadata", {}).get("name", "")
-                if cm_name:
-                    logger.info("Pruning old ConfigMap: %s", cm_name)
-                    delete_configmap(cm_name, namespace)
-    except Exception as e:
-        logger.warning(
-            "Failed to prune old ConfigMaps for %s: %s", function_name, e
-        )
+    if cm_result.returncode == 0:
+        try:
+            cm_items = json.loads(cm_result.stdout).get("items", [])
+            if len(cm_items) > max_retained:
+                excess_cms = cm_items[:-max_retained]
+                for cm in excess_cms:
+                    cm_name = cm.get("metadata", {}).get("name", "")
+                    if cm_name:
+                        logger.info("Pruning old ConfigMap: %s", cm_name)
+                        delete_configmap(cm_name, namespace)
+        except Exception as e:
+            logger.warning("Failed to prune old ConfigMaps for %s: %s", function_name, e)
