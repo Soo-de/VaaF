@@ -83,7 +83,9 @@
    Base & Reset
    ========================================================================== */
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -102,7 +104,7 @@ body {
   background-color: var(--bg-page);
   color: var(--text-primary);
   line-height: 1.5;
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -120,7 +122,8 @@ a:hover {
   text-decoration: underline;
 }
 
-code, pre {
+code,
+pre {
   font-family: var(--font-mono);
 }
 
@@ -128,22 +131,54 @@ code, pre {
    Typography & Utilities
    ========================================================================== */
 
-h1, h2, h3, h4 {
+h1,
+h2,
+h3,
+h4 {
   font-weight: 700;
   line-height: 1.25;
   color: var(--text-primary);
 }
 
-.text-muted { color: var(--text-muted); }
-.text-secondary { color: var(--text-secondary); }
-.text-danger { color: var(--color-error); }
-.mt-1 { margin-top: 0.25rem; }
-.mt-2 { margin-top: 0.5rem; }
-.mt-3 { margin-top: 0.75rem; }
-.mt-4 { margin-top: 1rem; }
-.p-2 { padding: 0.5rem; }
-.p-3 { padding: 0.75rem; }
-.hidden { display: none !important; }
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-danger {
+  color: var(--color-error);
+}
+
+.mt-1 {
+  margin-top: 0.25rem;
+}
+
+.mt-2 {
+  margin-top: 0.5rem;
+}
+
+.mt-3 {
+  margin-top: 0.75rem;
+}
+
+.mt-4 {
+  margin-top: 1rem;
+}
+
+.p-2 {
+  padding: 0.5rem;
+}
+
+.p-3 {
+  padding: 0.75rem;
+}
+
+.hidden {
+  display: none !important;
+}
 
 /* ==========================================================================
    Navbar
@@ -276,12 +311,11 @@ h1, h2, h3, h4 {
   width: 100%;
   max-width: 1920px;
   margin: 0 auto;
-  padding: 1rem 1.75rem 1.25rem;
+  padding: 1rem 1.75rem 3rem;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  min-height: 0;
+  gap: 1.25rem;
 }
 
 .top-dashboard-grid {
@@ -385,7 +419,8 @@ h1, h2, h3, h4 {
   position: relative;
 }
 
-.input, .select {
+.input,
+.select {
   width: 100%;
   padding: 0.65rem 0.9rem;
   background: var(--bg-surface-elevated);
@@ -398,7 +433,8 @@ h1, h2, h3, h4 {
   transition: all var(--transition-fast);
 }
 
-.input:focus, .select:focus {
+.input:focus,
+.select:focus {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
@@ -494,17 +530,25 @@ h1, h2, h3, h4 {
 .workspace-section {
   padding: 1.25rem 1.5rem;
   gap: 0.85rem;
-  flex: 1;
-  min-height: 600px;
+  min-height: 700px;
+  height: 960px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: fadeIn 200ms ease-out;
+  scroll-margin-top: 1.25rem;
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .workspace-header {
@@ -682,8 +726,13 @@ h1, h2, h3, h4 {
 }
 
 @keyframes spin-once {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .panel-tab-btn {
@@ -959,7 +1008,8 @@ h1, h2, h3, h4 {
   align-items: center;
 }
 
-.env-key-input, .env-val-input {
+.env-key-input,
+.env-val-input {
   font-family: var(--font-mono);
   font-size: 0.92rem;
 }
@@ -1210,7 +1260,8 @@ h1, h2, h3, h4 {
   font-size: 0.92rem;
 }
 
-.revisions-table th, .revisions-table td {
+.revisions-table th,
+.revisions-table td {
   padding: 0.85rem 1.15rem;
   border-bottom: 1px solid var(--border-color);
 }
@@ -1340,7 +1391,30 @@ h1, h2, h3, h4 {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tab-loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4.5rem 1rem;
+  gap: 0.85rem;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.tab-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--border-color);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
 }
 
 /* ==========================================================================
@@ -1403,9 +1477,20 @@ h1, h2, h3, h4 {
   border-radius: 50%;
 }
 
-.dot-green { background-color: var(--color-success); box-shadow: 0 0 6px var(--color-success); }
-.dot-red { background-color: var(--color-error); box-shadow: 0 0 6px var(--color-error); }
-.dot-yellow { background-color: var(--color-warning); box-shadow: 0 0 6px var(--color-warning); }
+.dot-green {
+  background-color: var(--color-success);
+  box-shadow: 0 0 6px var(--color-success);
+}
+
+.dot-red {
+  background-color: var(--color-error);
+  box-shadow: 0 0 6px var(--color-error);
+}
+
+.dot-yellow {
+  background-color: var(--color-warning);
+  box-shadow: 0 0 6px var(--color-warning);
+}
 
 .pulse-dot {
   width: 8px;
@@ -1416,9 +1501,20 @@ h1, h2, h3, h4 {
 }
 
 @keyframes pulse-ring {
-  0% { transform: scale(0.9); opacity: 0.8; }
-  50% { transform: scale(1.3); opacity: 1; }
-  100% { transform: scale(0.9); opacity: 0.8; }
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+
+  50% {
+    transform: scale(1.3);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
 }
 
 /* ==========================================================================
@@ -1482,9 +1578,17 @@ h1, h2, h3, h4 {
 }
 
 @keyframes pulse-skeleton {
-  0% { opacity: 0.5; }
-  50% { opacity: 0.9; }
-  100% { opacity: 0.5; }
+  0% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+
+  100% {
+    opacity: 0.5;
+  }
 }
 
 /* ==========================================================================
@@ -1525,13 +1629,27 @@ h1, h2, h3, h4 {
 }
 
 @keyframes toastSlideIn {
-  from { opacity: 0; transform: translateX(40px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 @keyframes toastSlideOut {
-  from { opacity: 1; transform: translateX(0); }
-  to { opacity: 0; transform: translateX(40px); }
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(40px);
+  }
 }
 
 .toast-content {
@@ -1548,17 +1666,37 @@ h1, h2, h3, h4 {
   flex-shrink: 0;
 }
 
-.toast-success { border-left: 4px solid var(--color-success); }
-.toast-success .toast-icon { color: var(--color-success); }
+.toast-success {
+  border-left: 4px solid var(--color-success);
+}
 
-.toast-error { border-left: 4px solid var(--color-error); }
-.toast-error .toast-icon { color: var(--color-error); }
+.toast-success .toast-icon {
+  color: var(--color-success);
+}
 
-.toast-warning { border-left: 4px solid var(--color-warning); }
-.toast-warning .toast-icon { color: var(--color-warning); }
+.toast-error {
+  border-left: 4px solid var(--color-error);
+}
 
-.toast-info { border-left: 4px solid var(--color-info); }
-.toast-info .toast-icon { color: var(--color-info); }
+.toast-error .toast-icon {
+  color: var(--color-error);
+}
+
+.toast-warning {
+  border-left: 4px solid var(--color-warning);
+}
+
+.toast-warning .toast-icon {
+  color: var(--color-warning);
+}
+
+.toast-info {
+  border-left: 4px solid var(--color-info);
+}
+
+.toast-info .toast-icon {
+  color: var(--color-info);
+}
 
 .toast-close {
   background: transparent;
@@ -1584,8 +1722,13 @@ h1, h2, h3, h4 {
 }
 
 @keyframes progressLinear {
-  from { width: 100%; }
-  to { width: 0%; }
+  from {
+    width: 100%;
+  }
+
+  to {
+    width: 0%;
+  }
 }
 
 /* ==========================================================================
@@ -1618,13 +1761,25 @@ h1, h2, h3, h4 {
 }
 
 @keyframes modalFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes modalScaleIn {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .modal-header {

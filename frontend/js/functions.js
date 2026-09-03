@@ -332,7 +332,7 @@ export const FunctionsManager = {
       item.addEventListener('click', (e) => {
         if (e.target.closest('.copy-url-btn') || e.target.closest('.delete-btn')) return;
         const name = item.getAttribute('data-name');
-        this.selectFunction(name);
+        this.selectFunction(name, true);
       });
     });
 
@@ -389,8 +389,9 @@ export const FunctionsManager = {
   /**
    * Select a function and show its spacious workspace.
    * @param {string} name
+   * @param {boolean} [shouldScroll=false] - Only scroll into view if user explicitly clicked/created
    */
-  async selectFunction(name) {
+  async selectFunction(name, shouldScroll = false) {
     if (this.activeFunctionName && this.activeFunctionName !== name) {
       disposeEditor(`editor-main-${this.activeFunctionName}`);
       disposeEditor(`editor-test-req-${this.activeFunctionName}`);
@@ -402,7 +403,18 @@ export const FunctionsManager = {
     if (!fn || !this.workspaceContainer) return;
 
     this.workspaceContainer.classList.remove('hidden');
-    this.renderWorkspace(fn);
+    await this.renderWorkspace(fn);
+
+    if (shouldScroll) {
+      setTimeout(() => {
+        this.workspaceContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        getEditor(`editor-main-${name}`)?.layout();
+      }, 120);
+    } else {
+      setTimeout(() => {
+        getEditor(`editor-main-${name}`)?.layout();
+      }, 100);
+    }
   },
 
   closeWorkspace() {
@@ -1115,22 +1127,39 @@ export const FunctionsManager = {
     const revisionsContainer = ws?.querySelector('.revisions-wrapper');
     if (!revisionsContainer) return;
 
+    const renderEmptyState = () => {
+      revisionsContainer.innerHTML = `
+        <div class="empty-state tab-empty-state">
+          <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+          <h4 class="empty-state-title">Henüz Sürüm Geçmişi Yok</h4>
+          <p class="text-muted">Bu fonksiyona ait dağıtılmış geçmiş bir revizyon kaydı bulunmuyor. Kod sekmesinden yeni bir dağıtım (deploy) başlatabilirsiniz.</p>
+        </div>
+      `;
+    };
+
+    if (fn.isDraft || !fn.url || fn.url === 'Henüz Deploy Edilmedi') {
+      renderEmptyState();
+      return;
+    }
+
+    // Show centered loading spinner while fetching
+    revisionsContainer.innerHTML = `
+      <div class="tab-loading-state">
+        <div class="tab-loading-spinner"></div>
+        <span>Sürümler yükleniyor...</span>
+      </div>
+    `;
+
     try {
       const res = await getFunctionRevisions(fnName);
       const revisions = res.revisions || [];
 
       if (revisions.length === 0) {
-        revisionsContainer.innerHTML = `
-          <div class="empty-state tab-empty-state">
-            <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-              <polyline points="2 17 12 22 22 17"></polyline>
-              <polyline points="2 12 12 17 22 12"></polyline>
-            </svg>
-            <h4 class="empty-state-title">Henüz Sürüm Geçmişi Yok</h4>
-            <p class="text-muted">Bu fonksiyona ait dağıtılmış geçmiş bir revizyon kaydı bulunmuyor. Kod sekmesinden yeni bir dağıtım (deploy) başlatabilirsiniz.</p>
-          </div>
-        `;
+        renderEmptyState();
         return;
       }
 
