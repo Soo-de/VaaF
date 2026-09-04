@@ -117,7 +117,10 @@ export async function createEditor(container, options = {}) {
     tabSize: 4,
     readOnly: options.readOnly ?? false,
     renderLineHighlight: options.renderLineHighlight || 'line',
-    padding: options.padding || { top: 6, bottom: 6 }
+    padding: options.padding || { top: 6, bottom: 6 },
+    scrollbar: {
+      alwaysConsumeMouseWheel: false
+    }
   });
 
   editorInstances.set(editorId, editor);
