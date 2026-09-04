@@ -995,34 +995,118 @@ h4 {
   display: block;
 }
 
-/* Easter Egg Bunny */
+/* Easter Egg: Official VakıfBank Animated Logo */
 
-.vsc-bunny {
+.vsc-bunny,
+.vsc-easteregg {
   position: absolute;
-  left: 50%;
-  bottom: 26px;
+  left: 0;
+  right: 0;
+  width: 100%;
+  bottom: 24px;
   display: none;
-  color: var(--vsc-sidebar-fg);
+  justify-content: center;
+  align-items: center;
   pointer-events: none;
-  transform: translateX(-50%);
+  user-select: none;
+  z-index: 10;
 }
 
-.vsc-sidebar.bunny-out .vsc-bunny {
+.vsc-sidebar.bunny-out .vsc-bunny,
+.vsc-sidebar.bunny-out .vsc-easteregg {
+  display: flex;
+}
+
+.vsc-vb-logo-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  animation: vsc-vb-fade-in 300ms ease-out forwards;
+}
+
+.vsc-vb-glow-aura {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 130px;
+  height: 60px;
+  background: radial-gradient(ellipse at center, rgba(251, 195, 78, 0.28) 0%, rgba(251, 195, 78, 0) 70%);
+  transform: translate(-50%, -50%);
+  filter: blur(10px);
+  pointer-events: none;
+  animation: vsc-vb-glow-pulse 2.6s ease-in-out infinite alternate;
+}
+
+.vsc-vb-svg-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.vsc-vb-unified-svg {
   display: block;
-  animation:
-    vsc-bunny-in 260ms ease-out,
-    vsc-bunny-hop 1100ms ease-in-out 260ms infinite;
+  filter: drop-shadow(0 2px 8px rgba(245, 158, 11, 0.25));
 }
 
-@keyframes vsc-bunny-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(16px) scale(0.7); }
-  to { opacity: 0.8; transform: translateX(-50%) translateY(0) scale(1); }
+.vsc-vb-wordmark {
+  fill: var(--vsc-sidebar-fg);
+  opacity: 0.95;
 }
 
-@keyframes vsc-bunny-hop {
-  0%, 100% { opacity: 0.8; transform: translateX(-50%) translateY(0) rotate(0deg); }
-  30% { opacity: 0.8; transform: translateX(-50%) translateY(-12px) rotate(-7deg); }
-  60% { opacity: 0.8; transform: translateX(-50%) translateY(0) rotate(5deg); }
+[data-theme="light"] .vsc-vb-wing {
+  fill: #f8fafc;
+}
+
+/* Diagonal Glossy Shimmer Light Sweep across the emblem */
+.vsc-vb-shimmer-sweep {
+  position: absolute;
+  top: -50%;
+  left: -80%;
+  width: 50%;
+  height: 200%;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 80%
+  );
+  transform: rotate(20deg);
+  pointer-events: none;
+  animation: vsc-vb-shimmer 3s ease-in-out infinite;
+}
+
+@keyframes vsc-vb-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes vsc-vb-glow-pulse {
+  0% {
+    opacity: 0.45;
+    transform: translate(-50%, -50%) scale(0.85);
+  }
+  100% {
+    opacity: 0.95;
+    transform: translate(-50%, -50%) scale(1.15);
+  }
+}
+
+@keyframes vsc-vb-shimmer {
+  0% {
+    left: -100%;
+  }
+  40%, 100% {
+    left: 200%;
+  }
 }
 
 body.vsc-resizing {
