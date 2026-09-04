@@ -1172,6 +1172,39 @@ body.vsc-resizing {
   background: var(--vsc-list-hover);
 }
 
+.vsc-section-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.vsc-section-header:hover .vsc-section-actions {
+  opacity: 1;
+}
+
+.vsc-icon-btn-mini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--vsc-sidebar-fg);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.vsc-icon-btn-mini:hover {
+  background: var(--vsc-list-hover);
+  color: #ffffff;
+}
+
 .vsc-chevron {
   flex-shrink: 0;
   transition: transform 120ms ease;
@@ -1204,6 +1237,7 @@ body.vsc-resizing {
   white-space: nowrap;
   cursor: pointer;
   transition: background var(--transition-fast);
+  position: relative;
 }
 
 .vsc-tree-row:hover {
@@ -1214,6 +1248,44 @@ body.vsc-resizing {
   background: var(--vsc-list-active);
   color: var(--vsc-list-active-fg);
   font-weight: 500;
+}
+
+.vsc-tree-delete-btn {
+  margin-left: auto;
+  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--vsc-sidebar-fg);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+
+.vsc-tree-row:hover .vsc-tree-delete-btn {
+  opacity: 0.7;
+}
+
+.vsc-tree-delete-btn:hover {
+  opacity: 1 !important;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.vsc-tree-folder.collapsed > .vsc-tree-folder-children {
+  display: none;
+}
+
+.vsc-tree-folder-row .vsc-chevron {
+  font-size: 10px;
+}
+
+.vsc-tree-folder.collapsed .vsc-tree-folder-row .vsc-chevron {
+  transform: rotate(-90deg);
 }
 
 .vsc-file-icon {
@@ -1454,6 +1526,21 @@ body.vsc-resizing {
   background: var(--vsc-tabbar-bg);
   border-bottom: 1px solid var(--vsc-border);
   position: relative;
+  overflow: hidden;
+}
+
+.vsc-tabs-list {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: none;
+}
+
+.vsc-tabs-list::-webkit-scrollbar {
+  display: none;
 }
 
 .vsc-layout-controls {

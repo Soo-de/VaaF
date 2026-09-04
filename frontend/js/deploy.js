@@ -11,7 +11,7 @@ export const DeployManager = {
    * Run deployment process for a function and stream logs to console container.
    * @param {Object} params
    * @param {string} params.functionName
-   * @param {string} params.code
+   * @param {Object<string,string>} params.files - File path → content map
    * @param {boolean} [params.isUpdate=false]
    * @param {Object} [params.envVars={}]
    * @param {HTMLElement} params.consoleElement
@@ -19,7 +19,7 @@ export const DeployManager = {
    * @param {function(Object=): void} [params.onComplete]
    * @param {function(Error=): void} [params.onError]
    */
-  async runDeploy({ functionName, code, isUpdate = false, envVars = {}, consoleElement, deployBtn, onComplete, onError }) {
+  async runDeploy({ functionName, files, isUpdate = false, envVars = {}, consoleElement, deployBtn, onComplete, onError }) {
     if (!consoleElement) return;
 
     // Show console container if hidden
@@ -69,7 +69,7 @@ export const DeployManager = {
     try {
       const result = await deployFunctionStream(
         functionName,
-        code,
+        files,
         isUpdate,
         envVars,
         (eventType, data) => {

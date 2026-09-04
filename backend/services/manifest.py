@@ -5,7 +5,8 @@ Pure functions for generating declarative Kubernetes ConfigMap and
 Knative Service manifests for Serverless function deployments.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
 from config import (
     BASE_RUNTIME_IMAGE,
     DEFAULT_CPU_LIMIT,
@@ -13,18 +14,27 @@ from config import (
     DEFAULT_MEMORY_LIMIT,
     DEFAULT_MEMORY_REQUEST,
 )
-from models import DeployRequest
+from models import DeployRequest, to_cm_key
 
 
 def build_configmap_manifest(
     function_name: str,
-    code: str,
+    files: dict[str, str],
     configmap_name: str,
     target_namespace: str,
     active_user: str,
     job_id: str,
 ) -> Dict[str, Any]:
-    """Pure function: Generates a Kubernetes ConfigMap manifest containing user code."""
+    """Pure function: Generates a Kubernetes ConfigMap manifest containing user code files.
+
+    File paths are encoded as ConfigMap-safe keys using '__' as the path separator.
+    Example: 'utils/database.py' becomes 'utils__database.py' in ConfigMap data.
+    """
+    cm_data = {
+        to_cm_key(path): content
+        for path, content in files.items()
+    }
+
     return {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -39,10 +49,16 @@ def build_configmap_manifest(
                 "faas.platform/managed-by": "vaaf-platform",
             },
         },
-        "data": {
-            "handler.py": code,
-        },
+        "data": cm_data,
     }
+
+
+def _build_volume_items(files: dict[str, str]) -> list[Dict[str, str]]:
+    """Build ConfigMap volume items list for hierarchical path mounting."""
+    return [
+        {"key": to_cm_key(path), "path": path}
+        for path in files.keys()
+    ]
 
 
 def build_knative_service_manifest(
@@ -62,6 +78,8 @@ def build_knative_service_manifest(
     if req.environment:
         for env_k, env_v in req.environment.items():
             env_vars.append({"name": env_k, "value": str(env_v)})
+
+    volume_items = _build_volume_items(req.files)
 
     return {
         "apiVersion": "serving.knative.dev/v1",
@@ -126,6 +144,7 @@ def build_knative_service_manifest(
                             "name": "user-code",
                             "configMap": {
                                 "name": configmap_name,
+                                "items": volume_items,
                             },
                         }
                     ],

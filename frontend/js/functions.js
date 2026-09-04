@@ -13,9 +13,22 @@ import {
   proxyRequest,
   runCodeStream
 } from './api.js';
-import { createEditor, getEditor, disposeEditor } from './editor.js';
+import { createEditor, getEditor, disposeEditor, switchEditorFile, getOrCreateModel, getLanguageForFile, disposeEditorModels } from './editor.js';
 import { DeployManager } from './deploy.js';
-import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey, getHttpStatusText } from './utils.js';
+import {
+  Toast,
+  Modal,
+  copyToClipboard,
+  escapeHtml,
+  formatDate,
+  validateEnvKey,
+  getHttpStatusText,
+  validateFilePath,
+  validateFolderPath,
+  MAX_FUNCTION_FILES,
+  MAX_FILE_SIZE_BYTES,
+  MAX_TOTAL_SIZE_BYTES
+} from './utils.js';
 
 const SIDEBAR_WIDTH_KEY = 'faas-vsc-sidebar-width';
 const SIDEBAR_COLLAPSED_KEY = 'faas-vsc-sidebar-collapsed';
@@ -60,7 +73,7 @@ export const FunctionsManager = {
       const map = this.getActivityMap();
       map[name] = Date.now();
       localStorage.setItem('faas_activity_map', JSON.stringify(map));
-    } catch {}
+    } catch { }
   },
 
   deleteActivity(name) {
@@ -69,7 +82,7 @@ export const FunctionsManager = {
       const map = this.getActivityMap();
       delete map[name];
       localStorage.setItem('faas_activity_map', JSON.stringify(map));
-    } catch {}
+    } catch { }
   },
 
   sortFunctions() {
@@ -97,13 +110,299 @@ export const FunctionsManager = {
   getSession(fnName) {
     if (!this.sessionCache.has(fnName)) {
       this.sessionCache.set(fnName, {
-        code: null,
+        files: {},
+        activeFile: 'handler.py',
+        openTabs: ['handler.py'],
+        folders: new Set(),
         envMap: new Map(),
         testBody: JSON.stringify({ key1: "value1" }, null, 2),
         isLoaded: false
       });
     }
     return this.sessionCache.get(fnName);
+  },
+
+  getFileIconSvg(filePath) {
+    const ext = filePath.split('.').pop()?.toLowerCase() || '';
+    if (ext === 'py') {
+      return `<svg viewBox="0 0 24 24" width="16" height="16"><path fill="#387eb8" d="M11.91 2c-5.08 0-4.76 2.2-4.76 2.2l.01 2.28h4.84v.69H5.16S2 6.8 2 11.9c0 5.12 2.76 4.93 2.76 4.93h1.65v-2.32s-.09-2.76 2.71-2.76h4.69s2.58.04 2.58-2.5V4.57S16.8 2 11.91 2zm-2.6 1.48a.93.93 0 1 1 0 1.86.93.93 0 0 1 0-1.86z"/><path fill="#ffe052" d="M12.09 22c5.08 0 4.76-2.2 4.76-2.2l-.01-2.28H12v-.69h6.84S22 17.2 22 12.1c0-5.12-2.76-4.93-2.76-4.93h-1.65v2.32s.09 2.76-2.71 2.76H10.2s-2.58-.04-2.58 2.5v4.68s-.41 2.57 4.48 2.57zm2.6-1.48a.93.93 0 1 1 0-1.86.93.93 0 0 1 0 1.86z"/></svg>`;
+    }
+    if (ext === 'json') {
+      return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#e8a828" stroke-width="2"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/><path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/></svg>`;
+    }
+    if (ext === 'yaml' || ext === 'yml') {
+      return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#a855f7" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+    }
+    if (ext === 'sql') {
+      return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#38bdf8" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`;
+    }
+    if (ext === 'md') {
+      return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+    }
+    return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  },
+
+  getFolderIconSvg(open) {
+    if (open) {
+      return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#e8a828" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="2" y1="10" x2="22" y2="10"/></svg>`;
+    }
+    return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#e8a828" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  },
+
+  buildFileTree(files, folders) {
+    const tree = { __files: [], __folders: {} };
+    const allPaths = Object.keys(files);
+    const folderSet = new Set(folders || []);
+
+    for (const path of allPaths) {
+      const parts = path.split('/');
+      if (parts.length === 1) {
+        tree.__files.push(path);
+      } else {
+        let node = tree;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const dir = parts[i];
+          if (!node.__folders[dir]) {
+            node.__folders[dir] = { __files: [], __folders: {} };
+          }
+          node = node.__folders[dir];
+        }
+        node.__files.push(path);
+      }
+    }
+
+    for (const f of folderSet) {
+      const parts = f.split('/');
+      let node = tree;
+      for (const dir of parts) {
+        if (!node.__folders[dir]) {
+          node.__folders[dir] = { __files: [], __folders: {} };
+        }
+        node = node.__folders[dir];
+      }
+    }
+
+    return tree;
+  },
+
+  renderFileTreeHtml(tree, activeFile, depth = 0) {
+    let html = '';
+    const indent = depth * 16;
+    const sortedFolders = Object.keys(tree.__folders).sort();
+    const sortedFiles = [...tree.__files].sort((a, b) => {
+      if (a === 'handler.py') return -1;
+      if (b === 'handler.py') return 1;
+      return a.localeCompare(b);
+    });
+
+    for (const folderName of sortedFolders) {
+      html += `
+        <div class="vsc-tree-folder" data-folder="${escapeHtml(folderName)}">
+          <div class="vsc-tree-row vsc-tree-folder-row" style="padding-left: ${indent + 4}px">
+            <span class="vsc-folder-chevron"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
+            <span class="vsc-file-icon">${this.getFolderIconSvg(true)}</span>
+            <span class="vsc-entry-filename">${escapeHtml(folderName)}</span>
+          </div>
+          <div class="vsc-tree-folder-children">
+            ${this.renderFileTreeHtml(tree.__folders[folderName], activeFile, depth + 1)}
+          </div>
+        </div>
+      `;
+    }
+
+    for (const filePath of sortedFiles) {
+      const fileName = filePath.split('/').pop();
+      const isActive = filePath === activeFile;
+      const isHandler = filePath === 'handler.py';
+      html += `
+        <div class="vsc-tree-row ${isActive ? 'active' : ''} explorer-file-entry" data-filepath="${escapeHtml(filePath)}" style="padding-left: ${indent + 4}px">
+          <span class="vsc-file-icon">${this.getFileIconSvg(filePath)}</span>
+          <span class="vsc-entry-filename">${escapeHtml(fileName)}</span>
+          ${!isHandler ? `<button class="vsc-tree-delete-btn" data-filepath="${escapeHtml(filePath)}" title="Dosyay\u0131 Sil"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>` : ''}
+        </div>
+      `;
+    }
+    return html;
+  },
+
+  renderFileTree(fnName) {
+    const ws = this.workspaceContainer;
+    const treeContainer = ws?.querySelector('.vsc-file-tree');
+    if (!treeContainer) return;
+
+    const session = this.getSession(fnName);
+    const tree = this.buildFileTree(session.files, session.folders);
+    treeContainer.innerHTML = this.renderFileTreeHtml(tree, session.activeFile);
+
+    this.bindFileTreeEvents(fnName);
+  },
+
+  bindFileTreeEvents(fnName) {
+    const ws = this.workspaceContainer;
+    const editorId = `editor-main-${fnName}`;
+    const session = this.getSession(fnName);
+
+    ws?.querySelectorAll('.explorer-file-entry').forEach(row => {
+      row.addEventListener('click', () => {
+        const filePath = row.getAttribute('data-filepath');
+        if (!filePath || filePath === session.activeFile) return;
+        this.switchToFile(fnName, filePath);
+      });
+    });
+
+    ws?.querySelectorAll('.vsc-tree-folder-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const folder = row.closest('.vsc-tree-folder');
+        folder?.classList.toggle('collapsed');
+      });
+    });
+
+    ws?.querySelectorAll('.vsc-tree-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const filePath = btn.getAttribute('data-filepath');
+        if (!filePath || filePath === 'handler.py') return;
+
+        const confirmed = await Modal.confirm({
+          title: 'Dosyayı Sil',
+          message: `'${filePath}' dosyasını silmek istediğinize emin misiniz?`,
+          confirmText: 'Sil',
+          type: 'danger'
+        });
+
+        if (!confirmed) return;
+        delete session.files[filePath];
+        session.openTabs = session.openTabs.filter(t => t !== filePath);
+        if (session.activeFile === filePath) {
+          session.activeFile = 'handler.py';
+          switchEditorFile(editorId, 'handler.py', session.files['handler.py'] || '');
+        }
+        this.renderFileTree(fnName);
+        this.renderEditorTabs(fnName);
+        this.updateBreadcrumbs(fnName);
+      });
+    });
+  },
+
+  switchToFile(fnName, filePath) {
+    const session = this.getSession(fnName);
+    const editorId = `editor-main-${fnName}`;
+    const editor = getEditor(editorId);
+    if (!editor) return;
+
+    // Save current file content
+    const currentModel = editor.getModel();
+    if (currentModel && session.activeFile) {
+      session.files[session.activeFile] = currentModel.getValue();
+    }
+
+    session.activeFile = filePath;
+    if (!session.openTabs.includes(filePath)) {
+      session.openTabs.push(filePath);
+    }
+
+    switchEditorFile(editorId, filePath, session.files[filePath] || '');
+    this.renderFileTree(fnName);
+    this.renderEditorTabs(fnName);
+    this.updateBreadcrumbs(fnName);
+  },
+
+  renderEditorTabs(fnName) {
+    const ws = this.workspaceContainer;
+    const tabsList = ws?.querySelector('.vsc-tabs-list');
+    if (!tabsList) return;
+
+    const session = this.getSession(fnName);
+    let html = '';
+    for (const filePath of session.openTabs) {
+      const fileName = filePath.split('/').pop();
+      const isActive = filePath === session.activeFile;
+      const isHandler = filePath === 'handler.py';
+      html += `
+        <div class="vsc-tab ${isActive ? 'active' : ''}" data-filepath="${escapeHtml(filePath)}">
+          <span class="vsc-file-icon">${this.getFileIconSvg(filePath)}</span>
+          <span class="vsc-tab-filename">${escapeHtml(fileName)}</span>
+          ${!isHandler ? `<button class="vsc-tab-close" data-filepath="${escapeHtml(filePath)}" title="Sekmeyi Kapat">&times;</button>` : ''}
+        </div>
+      `;
+    }
+    tabsList.innerHTML = html;
+
+    tabsList.querySelectorAll('.vsc-tab').forEach(tab => {
+      tab.addEventListener('click', (e) => {
+        if (e.target.closest('.vsc-tab-close')) return;
+        const fp = tab.getAttribute('data-filepath');
+        if (fp) this.switchToFile(fnName, fp);
+      });
+    });
+
+    tabsList.querySelectorAll('.vsc-tab-close').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const fp = btn.getAttribute('data-filepath');
+        if (!fp || fp === 'handler.py') return;
+        session.openTabs = session.openTabs.filter(t => t !== fp);
+        if (session.activeFile === fp) {
+          session.activeFile = session.openTabs[session.openTabs.length - 1] || 'handler.py';
+          this.switchToFile(fnName, session.activeFile);
+          return;
+        }
+        this.renderEditorTabs(fnName);
+      });
+    });
+  },
+
+  updateBreadcrumbs(fnName) {
+    const ws = this.workspaceContainer;
+    const session = this.getSession(fnName);
+    const crumbFile = ws?.querySelector('.vsc-crumb-active-file');
+    if (crumbFile) {
+      const fileName = session.activeFile.split('/').pop();
+      crumbFile.innerHTML = `<span class="vsc-file-icon">${this.getFileIconSvg(session.activeFile)}</span><span class="vsc-crumb-file">${escapeHtml(fileName)}</span>`;
+    }
+  },
+
+  promptNewFile(fnName) {
+    const session = this.getSession(fnName);
+    const name = prompt('Dosya adını girin (ör: utils.py veya config/settings.json):');
+    if (!name || !name.trim()) return;
+    const filePath = name.trim();
+
+    const validation = validateFilePath(filePath);
+    if (!validation.isValid) {
+      Toast.error(validation.error);
+      return;
+    }
+
+    if (session.files[filePath]) {
+      Toast.error(`'${filePath}' zaten mevcut.`);
+      return;
+    }
+
+    if (Object.keys(session.files).length >= MAX_FUNCTION_FILES) {
+      Toast.error(`Maksimum ${MAX_FUNCTION_FILES} dosya sınırına ulaşıldı.`);
+      return;
+    }
+
+    const templates = { py: '', json: '{}\n', yaml: '', yml: '', txt: '', sql: '', env: '', md: '', csv: '', ini: '', xml: '' };
+    session.files[filePath] = templates[validation.ext] || '';
+    this.switchToFile(fnName, filePath);
+  },
+
+  promptNewFolder(fnName) {
+    const session = this.getSession(fnName);
+    const name = prompt('Klasör adını girin (ör: utils veya models):');
+    if (!name || !name.trim()) return;
+
+    const validation = validateFolderPath(name);
+    if (!validation.isValid) {
+      Toast.error(validation.error);
+      return;
+    }
+
+    session.folders.add(validation.cleanPath);
+    this.renderFileTree(fnName);
+    Toast.info(`'${validation.cleanPath}/' klasörü oluşturuldu.`);
   },
 
   init(listElement, workspaceElement) {
@@ -323,7 +622,7 @@ export const FunctionsManager = {
 
     try {
       if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(url).catch(() => {});
+        navigator.clipboard.writeText(url).catch(() => { });
       } else {
         const textarea = document.createElement('textarea');
         textarea.value = url;
@@ -447,7 +746,7 @@ export const FunctionsManager = {
       if (Number.isFinite(stored)) {
         return Math.min(Math.max(stored, PANEL_HEIGHT_MIN), 500);
       }
-    } catch {}
+    } catch { }
     return PANEL_HEIGHT_DEFAULT;
   },
 
@@ -567,6 +866,13 @@ export const FunctionsManager = {
 
     const crumbFnEl = clone.querySelector('.vsc-crumb-fn-name');
     if (crumbFnEl) crumbFnEl.textContent = fnName;
+
+    const crumbActiveFile = clone.querySelector('.vsc-crumb-active-file');
+    if (crumbActiveFile) {
+      const session = this.getSession(fnName);
+      const fileName = session.activeFile.split('/').pop();
+      crumbActiveFile.innerHTML = `<span class="vsc-file-icon">${this.getFileIconSvg(session.activeFile)}</span><span class="vsc-crumb-file">${escapeHtml(fileName)}</span>`;
+    }
 
     this.workspaceContainer.appendChild(clone);
     this.workspaceContainer.classList.remove('hidden');
@@ -689,20 +995,22 @@ export const FunctionsManager = {
 
     // Sidebar collapsible sections
     ws.querySelectorAll('.vsc-section-header').forEach(header => {
-      header.addEventListener('click', () => {
+      header.addEventListener('click', (e) => {
+        if (e.target.closest('.vsc-section-actions')) return;
         header.parentElement?.classList.toggle('collapsed');
       });
     });
 
-    // Explorer file entry: focuses editor
-    ws.querySelector('.explorer-file-entry')?.addEventListener('click', () => {
-      getEditor(`editor-main-${fnName}`)?.focus();
+    // New File button
+    ws.querySelector('.vsc-new-file-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.promptNewFile(fnName);
     });
 
-    // Tab close toast
-    ws.querySelector('.vsc-tab-close')?.addEventListener('click', (e) => {
+    // New Folder button
+    ws.querySelector('.vsc-new-folder-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      Toast.info('Bu fonksiyonun tek kod dosyası bulunuyor, kapatılamaz.');
+      this.promptNewFolder(fnName);
     });
 
     // Activity bar actions
@@ -754,12 +1062,12 @@ export const FunctionsManager = {
         explorerItem?.classList.add('active');
         sidebarToggleBtn?.classList.add('active');
         shell?.style.setProperty('--vsc-sidebar-width', `${this.getSidebarWidth()}px`);
-        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false'); } catch {}
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false'); } catch { }
       } else {
         shell?.classList.add('sidebar-hidden');
         explorerItem?.classList.remove('active');
         sidebarToggleBtn?.classList.remove('active');
-        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true'); } catch {}
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true'); } catch { }
       }
       getEditor(`editor-main-${fnName}`)?.layout();
     };
@@ -772,11 +1080,11 @@ export const FunctionsManager = {
         const h = this.getPanelHeight();
         panel?.style.setProperty('--vsc-panel-height', `${h}px`);
         panel.style.height = `${h}px`;
-        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'false'); } catch {}
+        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'false'); } catch { }
       } else {
         panel?.classList.add('collapsed');
         panelToggleBtn?.classList.remove('active');
-        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch {}
+        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch { }
       }
       getEditor(`editor-main-${fnName}`)?.layout();
     };
@@ -850,7 +1158,7 @@ export const FunctionsManager = {
 
           try {
             localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
-          } catch {}
+          } catch { }
         };
 
         const onUp = () => {
@@ -861,7 +1169,7 @@ export const FunctionsManager = {
 
           try {
             localStorage.setItem(SIDEBAR_COLLAPSED_KEY, isCollapsedDuringDrag ? 'true' : 'false');
-          } catch {}
+          } catch { }
 
           getEditor(`editor-main-${fnName}`)?.layout();
         };
@@ -908,7 +1216,7 @@ export const FunctionsManager = {
 
           try {
             localStorage.setItem(PANEL_HEIGHT_KEY, String(Math.round(height)));
-          } catch {}
+          } catch { }
         };
 
         const onUp = () => {
@@ -919,7 +1227,7 @@ export const FunctionsManager = {
 
           try {
             localStorage.setItem(PANEL_COLLAPSED_KEY, isPanelCollapsedDuringDrag ? 'true' : 'false');
-          } catch {}
+          } catch { }
 
           getEditor(`editor-main-${fnName}`)?.layout();
         };
@@ -944,33 +1252,46 @@ export const FunctionsManager = {
         } else if (action === 'close') {
           panel?.classList.add('collapsed');
           panelToggleBtn?.classList.remove('active');
-          try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch {}
+          try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch { }
         }
         getEditor(`editor-main-${fnName}`)?.layout();
       });
     });
 
-    // Load initial code and env from in-memory session or backend
+    // Load initial files and env from in-memory session or backend
     const session = this.getSession(fnName);
     if (!session.isLoaded) {
-      let codeContent = fn.code || '';
       let envMap = new Map();
       try {
         const codeRes = await getFunctionCode(fnName);
-        if (codeRes && codeRes.code) {
-          codeContent = codeRes.code;
+        if (codeRes) {
+          if (codeRes.files && Object.keys(codeRes.files).length > 0) {
+            session.files = { ...codeRes.files };
+          } else if (codeRes.code) {
+            session.files = { 'handler.py': codeRes.code };
+          }
           if (codeRes.environment) {
             Object.entries(codeRes.environment).forEach(([k, v]) => envMap.set(k, v));
           }
         }
       } catch {
-        // fallback
+        if (fn.files) {
+          session.files = { ...fn.files };
+        } else if (fn.code) {
+          session.files = { 'handler.py': fn.code };
+        }
       }
-      session.code = codeContent;
+      if (!session.files['handler.py'] && !Object.keys(session.files).length) {
+        session.files = { 'handler.py': '' };
+      }
+      session.activeFile = 'handler.py';
+      session.openTabs = ['handler.py'];
       session.envMap = envMap;
       session.isLoaded = true;
     }
 
+    this.renderFileTree(fnName);
+    this.renderEditorTabs(fnName);
     this.renderEnvRows(fnName);
 
     // Add env variable button
@@ -981,13 +1302,16 @@ export const FunctionsManager = {
       this.renderEnvRows(fnName);
     });
 
-    // Initialize Monaco Editor with VS Code settings
+    // Initialize Monaco Editor with active file
     const editorContainer = ws.querySelector('.workspace-main-editor');
     if (editorContainer) {
+      const activeContent = session.files[session.activeFile] || '';
+      const activeLang = getLanguageForFile(session.activeFile);
+
       const editorInstance = await createEditor(editorContainer, {
         id: `editor-main-${fnName}`,
-        value: session.code,
-        language: 'python',
+        value: activeContent,
+        language: activeLang,
         minimap: true,
         fontSize: 14,
         lineHeight: 20,
@@ -995,8 +1319,19 @@ export const FunctionsManager = {
         padding: { top: 6, bottom: 6 }
       });
 
+      // Create models for all files
+      const editorId = `editor-main-${fnName}`;
+      for (const [path, content] of Object.entries(session.files)) {
+        if (path !== session.activeFile) {
+          getOrCreateModel(editorId, path, content);
+        }
+      }
+      // Register the initial model as the active file model
+      getOrCreateModel(editorId, session.activeFile, activeContent);
+
       editorInstance?.onDidChangeModelContent(() => {
-        session.code = editorInstance.getValue();
+        const currentFile = session.activeFile;
+        session.files[currentFile] = editorInstance.getValue();
       });
 
       const cursorEl = ws.querySelector('.vsc-status-cursor');
@@ -1017,7 +1352,10 @@ export const FunctionsManager = {
     const runBtn = ws.querySelector('.btn-run-code');
     runBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
-      const latestCode = editorInstance ? editorInstance.getValue() : session.code;
+      if (editorInstance && session.activeFile) {
+        session.files[session.activeFile] = editorInstance.getValue();
+      }
+      const latestCode = session.files['handler.py'] || '';
       const consoleBody = ws.querySelector('.workspace-deploy-console');
 
       this.activatePanelPane(fn, 'output');
@@ -1071,7 +1409,43 @@ export const FunctionsManager = {
     const deployBtn = ws.querySelector('.btn-deploy');
     deployBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
-      const latestCode = editorInstance ? editorInstance.getValue() : session.code;
+      if (editorInstance && session.activeFile) {
+        session.files[session.activeFile] = editorInstance.getValue();
+      }
+      const latestFiles = { ...session.files };
+
+      // Pre-flight file validation
+      if (!latestFiles['handler.py'] || !latestFiles['handler.py'].trim()) {
+        Toast.error("Kök dizinde 'handler.py' dosyası bulunmalı ve içeriği boş olmamalıdır.");
+        return;
+      }
+
+      const fileCount = Object.keys(latestFiles).length;
+      if (fileCount > MAX_FUNCTION_FILES) {
+        Toast.error(`Maksimum dosya sayısı (${MAX_FUNCTION_FILES}) aşıldı: ${fileCount} dosya mevcut.`);
+        return;
+      }
+
+      let totalBytes = 0;
+      const encoder = new TextEncoder();
+      for (const [filePath, content] of Object.entries(latestFiles)) {
+        const fileCheck = validateFilePath(filePath);
+        if (!fileCheck.isValid) {
+          Toast.error(`Geçersiz dosya (${filePath}): ${fileCheck.error}`);
+          return;
+        }
+        const fileBytes = encoder.encode(content || '').length;
+        if (fileBytes > MAX_FILE_SIZE_BYTES) {
+          Toast.error(`'${filePath}' dosyasının boyutu (${Math.round(fileBytes / 1024)} KB) izin verilen 100 KB sınırını aşıyor.`);
+          return;
+        }
+        totalBytes += fileBytes;
+      }
+
+      if (totalBytes > MAX_TOTAL_SIZE_BYTES) {
+        Toast.error(`Toplam proje boyutu (${Math.round(totalBytes / 1024)} KB) izin verilen 800 KB sınırını aşıyor.`);
+        return;
+      }
 
       const envRows = ws.querySelectorAll('.vsc-env-list .env-row');
       const envObj = {};
@@ -1117,7 +1491,7 @@ export const FunctionsManager = {
 
       await DeployManager.runDeploy({
         functionName: fnName,
-        code: latestCode,
+        files: latestFiles,
         isUpdate: isUpdate,
         envVars: envObj,
         consoleElement: consoleWrapper,
@@ -1128,7 +1502,7 @@ export const FunctionsManager = {
             currentFn.ready = true;
             currentFn.deployed = true;
           }
-          session.code = latestCode;
+          session.files = { ...latestFiles };
 
           this.recordActivity(fnName);
           await this.loadFunctions(true);
@@ -1353,7 +1727,7 @@ export const FunctionsManager = {
 
         if (iconEl) iconEl.textContent = isSuccess ? '✔' : '✖';
         if (titleEl) titleEl.textContent = isSuccess ? 'Yürütme işlevi: başarılı' : 'Yürütme işlevi: başarısız';
-        
+
         if (headerBadgeEl) {
           headerBadgeEl.textContent = badgeLabel;
           headerBadgeEl.className = `badge lambda-header-badge ${isSuccess ? 'badge-ready' : 'badge-not-ready'}`;
@@ -1598,7 +1972,7 @@ export const FunctionsManager = {
             try {
               const rbRes = await rollbackRevision(fnName, rName);
               Toast.success(rbRes.message || 'Rollback tamamlandı.');
-              
+
               // Invalidate session cache so editor can pull rolled back code
               this.sessionCache.delete(fnName);
 
@@ -1628,16 +2002,28 @@ export const FunctionsManager = {
 
           try {
             const revCodeRes = await getRevisionCode(fnName, rName);
-            if (revCodeRes && revCodeRes.code) {
+            const revFiles = revCodeRes?.files || (revCodeRes?.code ? { 'handler.py': revCodeRes.code } : null);
+            if (revFiles) {
               const session = this.getSession(fnName);
-              session.code = revCodeRes.code;
+              session.files = { ...revFiles };
+              session.activeFile = 'handler.py';
+              session.openTabs = ['handler.py'];
 
-              const editor = getEditor(`editor-main-${fnName}`);
+              const editorId = `editor-main-${fnName}`;
+              disposeEditorModels(editorId);
+              const editor = getEditor(editorId);
               if (editor) {
-                editor.setValue(revCodeRes.code);
+                const model = getOrCreateModel(editorId, 'handler.py', revFiles['handler.py'] || '');
+                editor.setModel(model);
+                for (const [path, content] of Object.entries(revFiles)) {
+                  if (path !== 'handler.py') getOrCreateModel(editorId, path, content);
+                }
               }
 
-              Toast.success(`'${rName}' sürümünün kodu editöre yüklendi.`);
+              this.renderFileTree(fnName);
+              this.renderEditorTabs(fnName);
+              this.updateBreadcrumbs(fnName);
+              Toast.success(`'${rName}' sürümünün dosyaları editöre yüklendi.`);
 
               // Switch to Code Tab
               const codeTabBtn = ws.querySelector('.panel-tab-btn[data-tab="code"]');

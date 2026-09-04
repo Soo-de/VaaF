@@ -15,7 +15,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from config import logger
-from models import DeleteResponse
+from models import DeleteResponse, to_file_path
 from services.k8s import (
     delete_ksvc,
     get_configmap_data,
@@ -38,6 +38,15 @@ def _validate_name(name: str) -> None:
             status_code=400,
             detail="Invalid function name. Must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.",
         )
+
+
+def _configmap_data_to_files(cm_data: dict[str, str]) -> dict[str, str]:
+    """Convert ConfigMap data keys back to file paths.
+
+    ConfigMap keys use '__' as path separator (e.g. 'utils__db.py' → 'utils/db.py').
+    Plain keys without '__' are kept as-is (e.g. 'handler.py' → 'handler.py').
+    """
+    return {to_file_path(key): value for key, value in cm_data.items()}
 
 
 class RollbackRequest(BaseModel):
@@ -77,7 +86,7 @@ async def get_function_code(
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
     x_department: Optional[str] = Header(None, alias="X-Department"),
 ):
-    """Retrieve source code and environment variables from the active ConfigMap."""
+    """Retrieve all source files and environment variables from the active ConfigMap."""
     _validate_name(name)
     target_namespace = resolve_namespace(x_department)
     k8s_svc_name = resolve_service_name(name, x_user_id)
@@ -107,14 +116,16 @@ async def get_function_code(
                 status_code=404, detail=f"No user-code volume found for function '{name}'."
             )
 
-        # 3. Read code from ConfigMap
+        # 3. Read all files from ConfigMap
         cm_data = await asyncio.to_thread(
             get_configmap_data, configmap_name, target_namespace
         )
-        if not cm_data or "handler.py" not in cm_data:
+        if not cm_data:
             raise HTTPException(
                 status_code=404, detail=f"Source code missing in ConfigMap '{configmap_name}'."
             )
+
+        files = _configmap_data_to_files(cm_data)
 
         # 4. Extract custom environment variables (filter out platform internals)
         platform_keys = {"FUNCTION_NAME", "HANDLER_PATH", "DEPLOY_ID", "PORT"}
@@ -130,7 +141,8 @@ async def get_function_code(
         return {
             "name": name,
             "language": "python",
-            "code": cm_data["handler.py"],
+            "files": files,
+            "code": files.get("handler.py", ""),
             "environment": custom_env,
             "configmap": configmap_name,
         }
@@ -176,7 +188,7 @@ async def get_revision_code(
     revision_name: str,
     x_department: Optional[str] = Header(None, alias="X-Department"),
 ):
-    """Retrieve code that was deployed in a specific historical revision."""
+    """Retrieve all files that were deployed in a specific historical revision."""
     _validate_name(name)
     target_namespace = resolve_namespace(x_department)
 
@@ -206,16 +218,19 @@ async def get_revision_code(
         cm_data = await asyncio.to_thread(
             get_configmap_data, configmap_name, target_namespace
         )
-        if not cm_data or "handler.py" not in cm_data:
+        if not cm_data:
             raise HTTPException(
                 status_code=404, detail=f"Source code missing in ConfigMap '{configmap_name}'."
             )
+
+        files = _configmap_data_to_files(cm_data)
 
         return {
             "name": name,
             "revision_name": revision_name,
             "language": "python",
-            "code": cm_data["handler.py"],
+            "files": files,
+            "code": files.get("handler.py", ""),
             "configmap": configmap_name,
         }
 

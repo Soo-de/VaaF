@@ -52,7 +52,7 @@ export function saveLocalDraft(draft) {
     const drafts = getLocalDrafts().filter(d => d.name !== draft.name);
     drafts.unshift(draft);
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
-  } catch {}
+  } catch { }
 }
 
 export function removeLocalDraft(name) {
@@ -60,7 +60,7 @@ export function removeLocalDraft(name) {
     if (!name) return;
     const drafts = getLocalDrafts().filter(d => d.name !== name);
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(drafts));
-  } catch {}
+  } catch { }
 }
 
 function getMockStore() {
@@ -161,6 +161,7 @@ export async function createDraftFunction({ name, runtime = "python" }) {
     runtime,
     namespace: "vaaf-functions",
     code: DEFAULT_TEMPLATE_CODE,
+    files: { "handler.py": DEFAULT_TEMPLATE_CODE },
     environment: {},
     revisions: []
   };
@@ -252,21 +253,26 @@ export async function getFunctionCode(name) {
   // Check local draft first
   const drafts = getLocalDrafts();
   const draft = drafts.find(d => d.name === name);
-  if (draft && draft.code) {
+  if (draft && (draft.files || draft.code)) {
+    const files = draft.files || { "handler.py": draft.code };
     return {
       name: draft.name,
       language: draft.language || "python",
-      code: draft.code,
+      files,
+      code: files["handler.py"] || "",
       environment: draft.environment || {}
     };
   }
 
   if (USE_MOCK) {
     const fn = getMockStore().functions.find(f => f.name === name);
+    const defaultCode = 'def handler(event, context):\n    return {"message": "Hello"}\n';
+    const files = fn?.files || { "handler.py": fn?.code || defaultCode };
     return {
       name: name,
       language: fn?.runtime || "python",
-      code: fn?.code || 'def handler(event, context):\n    return {"message": "Hello"}\n',
+      files,
+      code: files["handler.py"] || defaultCode,
       environment: fn?.environment || {}
     };
   }
@@ -276,7 +282,12 @@ export async function getFunctionCode(name) {
     const errJson = await res.json().catch(() => ({}));
     throw new Error(errJson.detail || `Failed to fetch code for ${name}: ${res.status}`);
   }
-  return res.json();
+  const data = await res.json();
+  // Backward compat: if backend returns only `code`, wrap into `files`
+  if (!data.files && data.code) {
+    data.files = { "handler.py": data.code };
+  }
+  return data;
 }
 
 /**
@@ -311,10 +322,13 @@ export async function getRevisionCode(name, revisionName) {
   if (USE_MOCK) {
     const fn = getMockStore().functions.find(f => f.name === name);
     const rev = fn?.revisions?.find(r => r.name === revisionName);
+    const code = rev?.code || fn?.code || "";
+    const files = rev?.files || { "handler.py": code };
     return {
       name: name,
       revision: revisionName,
-      code: rev?.code || fn?.code || ""
+      files,
+      code: files["handler.py"] || ""
     };
   }
 
@@ -325,7 +339,11 @@ export async function getRevisionCode(name, revisionName) {
     const errJson = await res.json().catch(() => ({}));
     throw new Error(errJson.detail || `Failed to fetch code for revision ${revisionName}: ${res.status}`);
   }
-  return res.json();
+  const data = await res.json();
+  if (!data.files && data.code) {
+    data.files = { "handler.py": data.code };
+  }
+  return data;
 }
 
 /**
@@ -481,18 +499,21 @@ export async function proxyRequest({ url, method = "POST", headers = {}, body = 
 /**
  * Deploy function with SSE streaming progress callbacks.
  * @param {string} name - Function name
- * @param {string} code - Python code
+ * @param {Object<string,string>} files - File path → content map
  * @param {boolean} [isUpdate=false] - Whether it is an update to existing function
  * @param {Object} [envVars={}] - Environment variables key-value map
  * @param {function(string, string): void} onEvent - Callback for SSE events (eventType, data)
  * @returns {Promise<{ status: string, function_name: string, url: string }>}
  */
-export async function deployFunctionStream(name, code, isUpdate = false, envVars = {}, onEvent = () => {}) {
+export async function deployFunctionStream(name, files, isUpdate = false, envVars = {}, onEvent = () => { }) {
   if (USE_MOCK) {
+    const code = files["handler.py"] || "";
     return new Promise((resolve) => {
+      const fileCount = Object.keys(files).length;
+      const totalBytes = Object.values(files).reduce((sum, c) => sum + new Blob([c]).size, 0);
       const mockEvents = [
         { type: 'step', data: '📦 Step 1/3 — Fonksiyon kodu ve ortam değişkenleri kaydediliyor...' },
-        { type: 'log', data: `   → ${new Blob([code]).size} byte handler.py ConfigMap'e yazıldı` },
+        { type: 'log', data: `   → ${fileCount} dosya (${totalBytes} byte) ConfigMap'e yazıldı` },
         { type: 'step', data: '🚀 Step 2/3 — Knative Service konfigürasyonu oluşturuluyor...' },
         { type: 'log', data: '   → Image: faas-python-runtime:3.11-slim' },
         { type: 'step', data: '⏳ Step 3/3 — Fonksiyon podları ve route başlatılıyor...' },
@@ -523,6 +544,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
 
           if (existingFn) {
             existingFn.code = code;
+            existingFn.files = { ...files };
             existingFn.ready = true;
             existingFn.deployed = true;
             existingFn.environment = { ...envVars };
@@ -533,6 +555,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
               created_at: new Date().toISOString(),
               is_active: true,
               has_code: true,
+              files: { ...files },
               code
             });
           } else {
@@ -545,6 +568,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
               runtime: "python",
               namespace: "vaaf-functions",
               code,
+              files: { ...files },
               environment: { ...envVars },
               revisions: [
                 {
@@ -552,6 +576,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
                   created_at: new Date().toISOString(),
                   is_active: true,
                   has_code: true,
+                  files: { ...files },
                   code
                 }
               ]
@@ -577,7 +602,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
     body: JSON.stringify({
       name,
       language: "python",
-      code,
+      files,
       is_update: isUpdate,
       environment: envVars
     })
@@ -634,7 +659,7 @@ export async function deployFunctionStream(name, code, isUpdate = false, envVars
  * @param {function(string, string): void} onEvent - SSE callback (eventType, data)
  * @returns {Promise<{ status: string }>}
  */
-export async function runCodeStream(code, body = {}, envVars = {}, onEvent = () => {}) {
+export async function runCodeStream(code, body = {}, envVars = {}, onEvent = () => { }) {
   const response = await apiFetch("/functions/run", {
     method: "POST",
     body: JSON.stringify({ code, body, environment: envVars })

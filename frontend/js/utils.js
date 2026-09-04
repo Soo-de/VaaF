@@ -314,4 +314,105 @@ export function getHttpStatusText(statusCode) {
   return statusMap[statusCode] || (statusCode >= 200 && statusCode < 300 ? 'OK' : 'Error');
 }
 
+export const ALLOWED_FILE_EXTENSIONS = [
+  'py', 'json', 'yaml', 'yml', 'txt', 'sql', 'env', 'md', 'csv', 'ini', 'xml'
+];
+export const MAX_FUNCTION_FILES = 20;
+export const MAX_FILE_SIZE_BYTES = 100 * 1024;
+export const MAX_TOTAL_SIZE_BYTES = 800 * 1024;
+
+const FILE_SEGMENT_RE = /^[a-zA-Z0-9_.-]+$/;
+
+/**
+ * Validates a file path against naming, security, and extension rules.
+ * @param {string} path
+ * @returns {{isValid: boolean, error: string|null, ext?: string}}
+ */
+export function validateFilePath(path) {
+  if (!path || typeof path !== 'string' || !path.trim()) {
+    return { isValid: false, error: 'Dosya yolu boş olamaz.' };
+  }
+  const cleanPath = path.trim();
+
+  if (cleanPath.startsWith('/')) {
+    return { isValid: false, error: "Mutlak yollar (başında '/' olan yollar) yasaktır." };
+  }
+
+  if (cleanPath.includes('..')) {
+    return { isValid: false, error: "Üst dizine çıkma ('..') kesinlikle yasaktır." };
+  }
+
+  const segments = cleanPath.split('/');
+  for (const segment of segments) {
+    if (!segment || segment === '.' || segment === '..') {
+      return { isValid: false, error: 'Dosya yolu geçersiz veya boş segment içeriyor.' };
+    }
+    if (!FILE_SEGMENT_RE.test(segment)) {
+      return {
+        isValid: false,
+        error: `Dosya veya klasör adında geçersiz karakter ('${segment}'). Boşluk, Türkçe karakter ve özel karakterler yasaktır. Yalnızca [a-zA-Z0-9_.-] kullanılabilir.`
+      };
+    }
+  }
+
+  const filename = segments[segments.length - 1];
+  let ext = '';
+  if (filename.startsWith('.') && (filename.match(/\./g) || []).length === 1) {
+    ext = filename.slice(1).toLowerCase();
+  } else {
+    const dotIndex = filename.lastIndexOf('.');
+    if (dotIndex > 0) {
+      ext = filename.slice(dotIndex + 1).toLowerCase();
+    }
+  }
+
+  if (!ext) {
+    return { isValid: false, error: 'Dosya bir uzantıya sahip olmalıdır.' };
+  }
+
+  if (!ALLOWED_FILE_EXTENSIONS.includes(ext)) {
+    return {
+      isValid: false,
+      error: `Desteklenmeyen dosya uzantısı ('.${ext}'). İzin verilenler: ${ALLOWED_FILE_EXTENSIONS.map(e => '.' + e).join(', ')}`
+    };
+  }
+
+  return { isValid: true, error: null, ext };
+}
+
+/**
+ * Validates a folder path against naming and security rules.
+ * @param {string} path
+ * @returns {{isValid: boolean, error: string|null, cleanPath?: string}}
+ */
+export function validateFolderPath(path) {
+  if (!path || typeof path !== 'string' || !path.trim()) {
+    return { isValid: false, error: 'Klasör yolu boş olamaz.' };
+  }
+  const cleanPath = path.trim().replace(/\/+$/, '');
+
+  if (cleanPath.startsWith('/')) {
+    return { isValid: false, error: "Mutlak yollar (başında '/' olan yollar) yasaktır." };
+  }
+
+  if (cleanPath.includes('..')) {
+    return { isValid: false, error: "Üst dizine çıkma ('..') kesinlikle yasaktır." };
+  }
+
+  const segments = cleanPath.split('/');
+  for (const segment of segments) {
+    if (!segment || segment === '.' || segment === '..') {
+      return { isValid: false, error: 'Klasör yolu geçersiz veya boş segment içeriyor.' };
+    }
+    if (!FILE_SEGMENT_RE.test(segment)) {
+      return {
+        isValid: false,
+        error: `Klasör adında geçersiz karakter ('${segment}'). Boşluk, Türkçe karakter ve özel karakterler yasaktır. Yalnızca [a-zA-Z0-9_.-] kullanılabilir.`
+      };
+    }
+  }
+
+  return { isValid: true, error: null, cleanPath };
+}
+
 

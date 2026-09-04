@@ -55,17 +55,19 @@ async def run_deploy_pipeline(
     configmap_name = f"fn-{k8s_svc_name}-{job_id}"
 
     logger.info(
-        "[%s] Starting deploy: name='%s' k8s_svc='%s' ns='%s' user='%s'",
+        "[%s] Starting deploy: name='%s' k8s_svc='%s' ns='%s' user='%s' files=%d",
         job_id,
         req.name,
         k8s_svc_name,
         target_namespace,
         active_user,
+        len(req.files),
     )
 
     try:
-        # ── Code Syntax & Handler Signature ───────────
-        is_valid, val_err = validate_python_code(req.code)
+        # ── Code Syntax & Handler Signature Validation ───────────
+        handler_code = req.files.get("handler.py", "")
+        is_valid, val_err = validate_python_code(handler_code)
         if not is_valid:
             logger.warning("[%s] Pre-flight validation rejected '%s': %s", job_id, req.name, val_err)
             yield sse_event("error", val_err)
@@ -78,7 +80,7 @@ async def run_deploy_pipeline(
 
         cm_manifest = build_configmap_manifest(
             function_name=req.name,
-            code=req.code,
+            files=req.files,
             configmap_name=configmap_name,
             target_namespace=target_namespace,
             active_user=active_user,
@@ -100,8 +102,12 @@ async def run_deploy_pipeline(
             await set_job(job_id, {"status": "failed", "error": error_msg})
             return
 
-        code_size_bytes = len(req.code.encode("utf-8"))
-        yield sse_event("log", f"   → Stored handler.py ({code_size_bytes} bytes) in ConfigMap '{configmap_name}'")
+        total_bytes = sum(len(c.encode("utf-8")) for c in req.files.values())
+        file_count = len(req.files)
+        yield sse_event(
+            "log",
+            f"   → Stored {file_count} file(s) ({total_bytes} bytes) in ConfigMap '{configmap_name}'"
+        )
 
         # ── STEP 2: Generate & Apply Knative Service Manifest ─────────────────
         yield sse_event("step", "🚀 Step 2/3 — Applying Knative Service manifest...")
