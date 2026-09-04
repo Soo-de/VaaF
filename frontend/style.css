@@ -1154,7 +1154,7 @@ body.vsc-resizing {
   align-items: center;
   gap: 4px;
   width: 100%;
-  padding: 0 12px 0 6px;
+  padding: 0 8px 0 6px;
   background: transparent;
   border: none;
   color: var(--vsc-sidebar-fg);
@@ -1165,6 +1165,8 @@ body.vsc-resizing {
   letter-spacing: 0.04em;
   text-align: left;
   cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
   transition: background var(--transition-fast);
 }
 
@@ -1172,17 +1174,20 @@ body.vsc-resizing {
   background: var(--vsc-list-hover);
 }
 
+.vsc-fn-folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .vsc-section-actions {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.vsc-section-header:hover .vsc-section-actions {
-  opacity: 1;
+  flex-shrink: 0;
 }
 
 .vsc-icon-btn-mini {
@@ -1201,8 +1206,12 @@ body.vsc-resizing {
 }
 
 .vsc-icon-btn-mini:hover {
-  background: var(--vsc-list-hover);
-  color: #ffffff;
+  background: var(--accent-subtle);
+  color: var(--accent-primary);
+}
+
+.vsc-icon-btn-mini:active {
+  color: var(--accent-hover);
 }
 
 .vsc-chevron {

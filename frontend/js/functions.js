@@ -999,6 +999,13 @@ export const FunctionsManager = {
         if (e.target.closest('.vsc-section-actions')) return;
         header.parentElement?.classList.toggle('collapsed');
       });
+      header.addEventListener('keydown', (e) => {
+        if (e.target.closest('.vsc-section-actions')) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          header.parentElement?.classList.toggle('collapsed');
+        }
+      });
     });
 
     // New File button

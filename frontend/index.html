@@ -314,7 +314,7 @@
             <div class="vsc-sidebar-body">
               <!-- Files Section -->
               <div class="vsc-section">
-                <button class="vsc-section-header" type="button">
+                <div class="vsc-section-header" role="button" tabindex="0">
                   <svg class="vsc-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
                     stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
@@ -339,7 +339,7 @@
                       </svg>
                     </button>
                   </span>
-                </button>
+                </div>
                 <div class="vsc-section-body vsc-file-tree">
                   <!-- Dynamically populated by FunctionsManager -->
                 </div>
@@ -347,13 +347,13 @@
 
               <!-- Deploy Section (AWS Lambda Style) -->
               <div class="vsc-section vsc-deploy-section">
-                <button class="vsc-section-header" type="button">
+                <div class="vsc-section-header" role="button" tabindex="0">
                   <svg class="vsc-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
                     stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
                   </svg>
                   <span>DEPLOY</span>
-                </button>
+                </div>
                 <div class="vsc-section-body vsc-deploy-actions">
                   <button class="vsc-btn vsc-btn-deploy btn-deploy" type="button" title="Deploy">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
@@ -373,13 +373,13 @@
 
               <!-- Environment Variables Section (AWS Lambda Style) -->
               <div class="vsc-section vsc-env-section">
-                <button class="vsc-section-header" type="button">
+                <div class="vsc-section-header" role="button" tabindex="0">
                   <svg class="vsc-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
                     stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
                   </svg>
                   <span>ENVIRONMENT VARIABLES</span>
-                </button>
+                </div>
                 <div class="vsc-section-body">
                   <div class="vsc-env-list env-rows-list"></div>
                   <button class="vsc-btn vsc-btn-secondary btn-add-env" type="button">
