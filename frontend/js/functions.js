@@ -17,6 +17,18 @@ import { createEditor, getEditor, disposeEditor } from './editor.js';
 import { DeployManager } from './deploy.js';
 import { Toast, Modal, copyToClipboard, escapeHtml, formatDate, validateEnvKey, getHttpStatusText } from './utils.js';
 
+const SIDEBAR_WIDTH_KEY = 'faas-vsc-sidebar-width';
+const SIDEBAR_COLLAPSED_KEY = 'faas-vsc-sidebar-collapsed';
+const PANEL_HEIGHT_KEY = 'faas-vsc-panel-height';
+const PANEL_COLLAPSED_KEY = 'faas-vsc-panel-collapsed';
+const SIDEBAR_WIDTH_DEFAULT = 250;
+const SIDEBAR_WIDTH_MIN = 170;
+const SIDEBAR_WIDTH_MAX = 520;
+const SIDEBAR_COLLAPSE_THRESHOLD = 70;
+const PANEL_HEIGHT_DEFAULT = 190;
+const PANEL_HEIGHT_MIN = 80;
+const PANEL_COLLAPSE_THRESHOLD = 50;
+const EDITOR_MIN_WIDTH = 300;
 
 export const FunctionsManager = {
   listContainer: null,
@@ -417,6 +429,74 @@ export const FunctionsManager = {
     }
   },
 
+  getSidebarWidth() {
+    try {
+      const stored = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY), 10);
+      if (Number.isFinite(stored)) {
+        return Math.min(Math.max(stored, SIDEBAR_WIDTH_MIN), SIDEBAR_WIDTH_MAX);
+      }
+    } catch {
+      // Fallback to default
+    }
+    return SIDEBAR_WIDTH_DEFAULT;
+  },
+
+  getPanelHeight() {
+    try {
+      const stored = parseInt(localStorage.getItem(PANEL_HEIGHT_KEY), 10);
+      if (Number.isFinite(stored)) {
+        return Math.min(Math.max(stored, PANEL_HEIGHT_MIN), 500);
+      }
+    } catch {}
+    return PANEL_HEIGHT_DEFAULT;
+  },
+
+  activatePanelPane(fn) {
+    const ws = this.workspaceContainer;
+    const panel = ws?.querySelector('.vsc-panel');
+    if (!panel) return;
+
+    panel.classList.remove('collapsed');
+    const h = this.getPanelHeight();
+    panel.style.setProperty('--vsc-panel-height', `${h}px`);
+    panel.style.height = `${h}px`;
+
+    ws.querySelector('[data-layout-act="toggle-panel"]')?.classList.add('active');
+    getEditor(`editor-main-${fn.name}`)?.layout();
+  },
+
+  updateStatusDeploy(fn) {
+    const ws = this.workspaceContainer;
+    const statusItem = ws?.querySelector('.vsc-status-deploy');
+    if (!statusItem) return;
+
+    if (fn.deploying) {
+      statusItem.className = 'vsc-status-item vsc-status-deploy deploying';
+      statusItem.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" class="spin-anim">
+          <circle cx="12" cy="12" r="9" stroke-dasharray="28" stroke-dashoffset="10"></circle>
+        </svg>
+        <span>Deploying</span>
+      `;
+    } else if (fn.ready || fn.deployed) {
+      statusItem.className = 'vsc-status-item vsc-status-deploy ready';
+      statusItem.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <span>Deployed</span>
+      `;
+    } else {
+      statusItem.className = 'vsc-status-item vsc-status-deploy';
+      statusItem.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9"></circle>
+        </svg>
+        <span>Not Deployed</span>
+      `;
+    }
+  },
+
   closeWorkspace() {
     if (this.workspaceContainer) {
       this.workspaceContainer.classList.add('hidden');
@@ -457,6 +537,36 @@ export const FunctionsManager = {
 
     const copyBtn = clone.querySelector('.copy-url-btn');
     if (copyBtn) copyBtn.dataset.url = fn.url;
+
+    // Populate VS Code Shell
+    const shell = clone.querySelector('.vscode-shell');
+    const isSidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+    if (shell) {
+      shell.style.setProperty('--vsc-sidebar-width', `${this.getSidebarWidth()}px`);
+      if (isSidebarCollapsed) {
+        shell.classList.add('sidebar-hidden');
+        clone.querySelector('.vsc-activity-item[data-act="explorer"]')?.classList.remove('active');
+        clone.querySelector('[data-layout-act="toggle-sidebar"]')?.classList.remove('active');
+      }
+    }
+
+    const panel = clone.querySelector('.vsc-panel');
+    const isPanelCollapsed = localStorage.getItem(PANEL_COLLAPSED_KEY) === 'true';
+    if (panel) {
+      const h = this.getPanelHeight();
+      panel.style.setProperty('--vsc-panel-height', `${h}px`);
+      panel.style.height = `${h}px`;
+      if (isPanelCollapsed) {
+        panel.classList.add('collapsed');
+        clone.querySelector('[data-layout-act="toggle-panel"]')?.classList.remove('active');
+      }
+    }
+
+    const fnFolderEl = clone.querySelector('.vsc-fn-folder-name');
+    if (fnFolderEl) fnFolderEl.textContent = fnName.toUpperCase();
+
+    const crumbFnEl = clone.querySelector('.vsc-crumb-fn-name');
+    if (crumbFnEl) crumbFnEl.textContent = fnName;
 
     this.workspaceContainer.appendChild(clone);
     this.workspaceContainer.classList.remove('hidden');
@@ -523,7 +633,7 @@ export const FunctionsManager = {
       });
     });
 
-    // Tab-bar refresh button: context-sensitive with in-place green checkmark feedback
+    // Tab-bar refresh button
     if (tabRefreshBtn) {
       tabRefreshBtn.addEventListener('click', async () => {
         if (tabRefreshBtn.disabled) return;
@@ -545,6 +655,7 @@ export const FunctionsManager = {
               if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
               const urlTextEl = ws.querySelector('.url-text');
               this._updateUrlDisplay(urlTextEl, updatedFn);
+              this.updateStatusDeploy(updatedFn);
             }
           } else if (activeTab === 'test') {
             await this.loadFunctions(true);
@@ -555,7 +666,6 @@ export const FunctionsManager = {
             await this.loadLogs(fnName, 100);
           }
 
-          // In-place Instant Checkmark: zero animation, exact same button size
           tabRefreshBtn.classList.add('btn-refresh-success');
           tabRefreshBtn.innerHTML = `
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -575,28 +685,268 @@ export const FunctionsManager = {
       });
     }
 
-    // Subtabs: Editor vs Env
-    const subtabBtns = ws.querySelectorAll('.subtab-btn');
-    const editorPane = ws.querySelector('.subtab-pane[data-pane="editor"]');
-    const envPane = ws.querySelector('.subtab-pane[data-pane="env"]');
-    subtabBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const subtab = btn.getAttribute('data-subtab');
-        subtabBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+    const shell = ws.querySelector('.vscode-shell');
 
-        if (subtab === 'editor') {
-          editorPane?.classList.remove('hidden');
-          editorPane?.classList.add('active');
-          envPane?.classList.add('hidden');
-          envPane?.classList.remove('active');
-          getEditor(`editor-main-${fnName}`)?.layout();
-        } else {
-          envPane?.classList.remove('hidden');
-          envPane?.classList.add('active');
-          editorPane?.classList.add('hidden');
-          editorPane?.classList.remove('active');
+    // Sidebar collapsible sections
+    ws.querySelectorAll('.vsc-section-header').forEach(header => {
+      header.addEventListener('click', () => {
+        header.parentElement?.classList.toggle('collapsed');
+      });
+    });
+
+    // Explorer file entry: focuses editor
+    ws.querySelector('.explorer-file-entry')?.addEventListener('click', () => {
+      getEditor(`editor-main-${fnName}`)?.focus();
+    });
+
+    // Tab close toast
+    ws.querySelector('.vsc-tab-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      Toast.info('Bu fonksiyonun tek kod dosyası bulunuyor, kapatılamaz.');
+    });
+
+    // Activity bar actions
+    ws.querySelectorAll('.vsc-activity-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const act = item.getAttribute('data-act');
+
+        if (act === 'explorer') {
+          toggleSidebar();
+          return;
         }
+
+        if (act === 'search') {
+          const editor = getEditor(`editor-main-${fnName}`);
+          editor?.focus();
+          editor?.getAction('actions.find')?.run();
+          return;
+        }
+
+        if (act === 'scm') {
+          ws.querySelector('.panel-tab-btn[data-tab="revisions"]')?.click();
+          return;
+        }
+
+        if (act === 'run') {
+          ws.querySelector('.panel-tab-btn[data-tab="test"]')?.click();
+          return;
+        }
+
+        if (act === 'settings') {
+          const envSec = ws.querySelector('.vsc-env-section');
+          envSec?.classList.remove('collapsed');
+          envSec?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      });
+    });
+
+    const panel = ws.querySelector('.vsc-panel');
+    const panelSash = ws.querySelector('.vsc-panel-sash');
+    const explorerItem = ws.querySelector('.vsc-activity-item[data-act="explorer"]');
+    const sidebarToggleBtn = ws.querySelector('[data-layout-act="toggle-sidebar"]');
+    const panelToggleBtn = ws.querySelector('[data-layout-act="toggle-panel"]');
+
+    // Layout Actions (Buttons 1, 2, 4)
+    const toggleSidebar = () => {
+      const isHidden = shell?.classList.contains('sidebar-hidden');
+      if (isHidden) {
+        shell?.classList.remove('sidebar-hidden');
+        explorerItem?.classList.add('active');
+        sidebarToggleBtn?.classList.add('active');
+        shell?.style.setProperty('--vsc-sidebar-width', `${this.getSidebarWidth()}px`);
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'false'); } catch {}
+      } else {
+        shell?.classList.add('sidebar-hidden');
+        explorerItem?.classList.remove('active');
+        sidebarToggleBtn?.classList.remove('active');
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true'); } catch {}
+      }
+      getEditor(`editor-main-${fnName}`)?.layout();
+    };
+
+    const togglePanel = () => {
+      const isCollapsed = panel?.classList.contains('collapsed');
+      if (isCollapsed) {
+        panel?.classList.remove('collapsed');
+        panelToggleBtn?.classList.add('active');
+        const h = this.getPanelHeight();
+        panel?.style.setProperty('--vsc-panel-height', `${h}px`);
+        panel.style.height = `${h}px`;
+        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'false'); } catch {}
+      } else {
+        panel?.classList.add('collapsed');
+        panelToggleBtn?.classList.remove('active');
+        try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch {}
+      }
+      getEditor(`editor-main-${fnName}`)?.layout();
+    };
+
+    const toggleFullscreen = () => {
+      const isFull = shell?.classList.toggle('vscode-fullscreen');
+      const maxIcon = ws.querySelector('.vsc-icon-maximize');
+      const restoreIcon = ws.querySelector('.vsc-icon-restore');
+      const fullBtn = ws.querySelector('[data-layout-act="toggle-fullscreen"]');
+
+      if (isFull) {
+        maxIcon?.classList.add('hidden');
+        restoreIcon?.classList.remove('hidden');
+        fullBtn?.classList.add('active');
+      } else {
+        maxIcon?.classList.remove('hidden');
+        restoreIcon?.classList.add('hidden');
+        fullBtn?.classList.remove('active');
+      }
+      getEditor(`editor-main-${fnName}`)?.layout();
+    };
+
+    ws.querySelector('[data-layout-act="toggle-sidebar"]')?.addEventListener('click', toggleSidebar);
+    ws.querySelector('[data-layout-act="toggle-panel"]')?.addEventListener('click', togglePanel);
+    ws.querySelector('[data-layout-act="toggle-fullscreen"]')?.addEventListener('click', toggleFullscreen);
+    ws.querySelector('[data-panel-goto="output"]')?.addEventListener('click', togglePanel);
+
+    // Escape key exits fullscreen
+    const escFullscreenHandler = (e) => {
+      if (e.key === 'Escape' && shell?.classList.contains('vscode-fullscreen')) {
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener('keydown', escFullscreenHandler);
+
+    // Sidebar resize sash with collapse & drag-to-reopen
+    const sash = ws.querySelector('.vsc-sash');
+    if (sash && shell) {
+      sash.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const shellRect = shell.getBoundingClientRect();
+        const maxWidth = Math.min(
+          SIDEBAR_WIDTH_MAX,
+          Math.max(SIDEBAR_WIDTH_MIN, shellRect.width - 48 - EDITOR_MIN_WIDTH)
+        );
+        const sidebar = ws.querySelector('.vsc-sidebar');
+        let isCollapsedDuringDrag = shell.classList.contains('sidebar-hidden');
+
+        const onMove = (moveEvent) => {
+          const rawWidth = moveEvent.clientX - shellRect.left - 48;
+
+          // Dragging past collapse threshold collapses the sidebar
+          if (rawWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
+            isCollapsedDuringDrag = true;
+            shell.classList.add('sidebar-hidden');
+            explorerItem?.classList.remove('active');
+            sidebarToggleBtn?.classList.remove('active');
+            sidebar?.classList.remove('bunny-out');
+            return;
+          }
+
+          // Otherwise restore/maintain expanded state
+          isCollapsedDuringDrag = false;
+          shell.classList.remove('sidebar-hidden');
+          explorerItem?.classList.add('active');
+          sidebarToggleBtn?.classList.add('active');
+
+          const width = Math.min(Math.max(rawWidth, SIDEBAR_WIDTH_MIN), maxWidth);
+          shell.style.setProperty('--vsc-sidebar-width', `${width}px`);
+          sidebar?.classList.toggle('bunny-out', width >= maxWidth);
+
+          try {
+            localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
+          } catch {}
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          sash.classList.remove('dragging');
+          document.body.classList.remove('vsc-resizing');
+
+          try {
+            localStorage.setItem(SIDEBAR_COLLAPSED_KEY, isCollapsedDuringDrag ? 'true' : 'false');
+          } catch {}
+
+          getEditor(`editor-main-${fnName}`)?.layout();
+        };
+
+        sash.classList.add('dragging');
+        document.body.classList.add('vsc-resizing');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    // Panel vertical resize sash with snap-to-collapse & drag-to-reopen
+    if (panelSash && panel && shell) {
+      panelSash.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const editorGroup = ws.querySelector('.vsc-editor-group');
+        const editorGroupRect = editorGroup?.getBoundingClientRect() || shell.getBoundingClientRect();
+        const startY = e.clientY;
+        const isInitiallyCollapsed = panel.classList.contains('collapsed');
+        const startHeight = isInitiallyCollapsed ? 0 : panel.offsetHeight;
+        let isPanelCollapsedDuringDrag = isInitiallyCollapsed;
+
+        const onMove = (moveEvent) => {
+          const deltaY = startY - moveEvent.clientY;
+          const rawHeight = startHeight + deltaY;
+
+          // When moving down close to the "OUTPUT" header (< 38px), snap collapse like VS Code
+          if (rawHeight < 38) {
+            isPanelCollapsedDuringDrag = true;
+            panel.classList.add('collapsed');
+            panelToggleBtn?.classList.remove('active');
+            return;
+          }
+
+          // When moving up past the header threshold, snap back open and follow cursor
+          isPanelCollapsedDuringDrag = false;
+          panel.classList.remove('collapsed');
+          panelToggleBtn?.classList.add('active');
+
+          const maxHeight = Math.max(100, editorGroupRect.height - 70);
+          const height = Math.min(Math.max(rawHeight, 32), maxHeight);
+          panel.style.setProperty('--vsc-panel-height', `${height}px`);
+          panel.style.height = `${height}px`;
+
+          try {
+            localStorage.setItem(PANEL_HEIGHT_KEY, String(Math.round(height)));
+          } catch {}
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          panelSash.classList.remove('dragging');
+          document.body.classList.remove('vsc-resizing');
+
+          try {
+            localStorage.setItem(PANEL_COLLAPSED_KEY, isPanelCollapsedDuringDrag ? 'true' : 'false');
+          } catch {}
+
+          getEditor(`editor-main-${fnName}`)?.layout();
+        };
+
+        panelSash.classList.add('dragging');
+        document.body.classList.add('vsc-resizing');
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+
+    // Panel action buttons (clear, maximize, close)
+    ws.querySelectorAll('[data-panel-act]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-panel-act');
+
+        if (action === 'clear') {
+          const consoleEl = ws.querySelector('.workspace-deploy-console');
+          if (consoleEl) consoleEl.innerHTML = '';
+        } else if (action === 'maximize') {
+          panel?.classList.toggle('maximized');
+        } else if (action === 'close') {
+          panel?.classList.add('collapsed');
+          panelToggleBtn?.classList.remove('active');
+          try { localStorage.setItem(PANEL_COLLAPSED_KEY, 'true'); } catch {}
+        }
+        getEditor(`editor-main-${fnName}`)?.layout();
       });
     });
 
@@ -631,38 +981,55 @@ export const FunctionsManager = {
       this.renderEnvRows(fnName);
     });
 
-    // Initialize Monaco Editor
+    // Initialize Monaco Editor with VS Code settings
     const editorContainer = ws.querySelector('.workspace-main-editor');
     if (editorContainer) {
       const editorInstance = await createEditor(editorContainer, {
         id: `editor-main-${fnName}`,
         value: session.code,
-        language: 'python'
+        language: 'python',
+        minimap: true,
+        fontSize: 14,
+        lineHeight: 20,
+        renderLineHighlight: 'line',
+        padding: { top: 6, bottom: 6 }
       });
+
       editorInstance?.onDidChangeModelContent(() => {
         session.code = editorInstance.getValue();
       });
+
+      const cursorEl = ws.querySelector('.vsc-status-cursor');
+      if (cursorEl && editorInstance) {
+        const updateCursor = () => {
+          const pos = editorInstance.getPosition();
+          if (pos) cursorEl.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
+        };
+        editorInstance.onDidChangeCursorPosition(updateCursor);
+        updateCursor();
+      }
     }
 
-    // Run Code button (SSE Real-Time Stream)
+    // Initial status bar deploy indicator
+    this.updateStatusDeploy(fn);
+
+    // Run Code button (Test)
     const runBtn = ws.querySelector('.btn-run-code');
     runBtn?.addEventListener('click', async () => {
       const editorInstance = getEditor(`editor-main-${fnName}`);
       const latestCode = editorInstance ? editorInstance.getValue() : session.code;
-      const consoleWrapper = ws.querySelector('.ide-output-container');
-      const consoleBody = consoleWrapper?.querySelector('.console-body') || consoleWrapper;
+      const consoleBody = ws.querySelector('.workspace-deploy-console');
 
+      this.activatePanelPane(fn, 'output');
       if (!consoleBody) return;
-      consoleWrapper?.classList.remove('hidden');
 
-      // Record activity so tested function jumps to the top
       this.recordActivity(fnName);
       this.sortFunctions();
       this.renderList();
 
       const origHtml = runBtn.innerHTML;
       runBtn.disabled = true;
-      runBtn.innerHTML = `<span class="spinner"></span><span>Çalıştırılıyor...</span>`;
+      runBtn.innerHTML = `<span class="spinner"></span><span>Çalışıyor...</span>`;
 
       consoleBody.innerHTML = '';
       const ts = () => new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -684,7 +1051,7 @@ export const FunctionsManager = {
             try {
               const parsed = JSON.parse(data);
               addLine('console-line-step', `<span class="console-ts">[${ts()}]</span> <strong class="console-step">Return Değeri:</strong>`);
-              addLine('console-line-log', `<pre style="margin:0.25rem 0;padding:0.5rem;background:rgba(255,255,255,0.03);border-radius:4px;border:1px solid var(--border-color);">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`);
+              addLine('console-line-log', `<pre class="console-output-pre">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`);
             } catch {
               addLine('console-line-log', `<span class="console-ts">[${ts()}]</span> <span>Return: ${escapeHtml(data)}</span>`);
             }
@@ -706,7 +1073,7 @@ export const FunctionsManager = {
       const editorInstance = getEditor(`editor-main-${fnName}`);
       const latestCode = editorInstance ? editorInstance.getValue() : session.code;
 
-      const envRows = ws.querySelectorAll('.env-row');
+      const envRows = ws.querySelectorAll('.vsc-env-list .env-row');
       const envObj = {};
       let hasEnvError = false;
 
@@ -742,9 +1109,11 @@ export const FunctionsManager = {
         this.renderList();
         const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
         if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+        this.updateStatusDeploy(currentFn);
       }
 
-      const consoleWrapper = ws.querySelector('.ide-output-container');
+      this.activatePanelPane(fn, 'output');
+      const consoleWrapper = ws.querySelector('.vsc-panel');
 
       await DeployManager.runDeploy({
         functionName: fnName,
@@ -770,6 +1139,7 @@ export const FunctionsManager = {
             if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(updatedFn);
             const urlTextEl = ws.querySelector('.url-text');
             this._updateUrlDisplay(urlTextEl, updatedFn);
+            this.updateStatusDeploy(updatedFn);
           }
 
           this.refreshActiveRevisions();
@@ -780,6 +1150,7 @@ export const FunctionsManager = {
             this.renderList();
             const statusBadgeSlot = ws.querySelector('.workspace-status-badge-slot');
             if (statusBadgeSlot) statusBadgeSlot.innerHTML = this.getStatusBadge(currentFn);
+            this.updateStatusDeploy(currentFn);
           }
           this.loadFunctions(true);
           this.refreshActiveRevisions();
@@ -796,7 +1167,7 @@ export const FunctionsManager = {
     const session = this.getSession(fnName);
     const envMap = session.envMap;
     if (envMap.size === 0) {
-      container.innerHTML = `<div class="text-muted p-2">Henüz ortam değişkeni tanımlanmadı.</div>`;
+      container.innerHTML = `<div class="vsc-env-empty">Henüz ortam değişkeni yapılandırılmadı.</div>`;
       return;
     }
 
@@ -807,16 +1178,12 @@ export const FunctionsManager = {
       const invalidClass = (k && !isValid) ? ' input-invalid' : '';
       const errorText = (k && !isValid) ? (error || '') : '';
       rows += `
-        <div class="env-row" data-index="${idx}" style="align-items: flex-start; margin-bottom: 10px;">
-          <div class="env-key-col" style="flex: 1; display: flex; flex-direction: column;">
-            <input type="text" class="input env-key-input${invalidClass}" placeholder="ANAHTAR (örn: API_KEY)" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
-            <span class="env-key-error text-danger" style="font-size: 11px; color: #f87171; min-height: 14px; margin-top: 3px;">${escapeHtml(errorText)}</span>
-          </div>
-          <div class="env-val-col" style="flex: 1; display: flex; flex-direction: column;">
-            <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
-          </div>
-          <button class="icon-btn delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil" style="margin-top: 6px;">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        <div class="env-row" data-index="${idx}">
+          <input type="text" class="input env-key-input${invalidClass}" placeholder="ANAHTAR (örn: API_KEY)" value="${escapeHtml(k)}" data-oldkey="${escapeHtml(k)}" />
+          <input type="text" class="input env-val-input" placeholder="DEĞER" value="${escapeHtml(v)}" data-key="${escapeHtml(k)}" />
+          ${errorText ? `<span class="env-key-error text-danger" style="font-size: 11px; line-height: 1.2;">${escapeHtml(errorText)}</span>` : ''}
+          <button class="delete-env-btn" data-key="${escapeHtml(k)}" title="Değişkeni Sil">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
       `;

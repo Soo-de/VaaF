@@ -259,67 +259,334 @@
         </button>
       </div>
 
-      <!-- Tab 1: Kod (IDE & Deploy Output Layout) -->
+      <!-- Tab 1: Kod (VS Code Replica IDE Layout) -->
       <div class="panel-tab-content active" data-content-tab="code">
-        <div class="editor-action-bar">
-          <div class="code-subtabs-bar">
-            <button class="subtab-btn active" data-subtab="editor">Editor</button>
-            <button class="subtab-btn" data-subtab="env">Environment</button>
+        <div class="vscode-shell" lang="en">
+          <!-- Activity Bar -->
+          <div class="vsc-activitybar">
+            <div class="vsc-activity-group">
+              <button class="vsc-activity-item active" data-act="explorer" type="button"
+                title="Explorer — Kenar çubuğunu aç/kapat">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M10 3h5l4 4v12a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path>
+                  <polyline points="15 3 15 8 19 8"></polyline>
+                  <path d="M6 7v12a3 3 0 0 0 3 3h7"></path>
+                </svg>
+              </button>
+              <button class="vsc-activity-item" data-act="search" type="button" title="Search — Editörde ara">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <circle cx="11" cy="11" r="7"></circle>
+                  <line x1="21" y1="21" x2="16.5" y2="16.5"></line>
+                </svg>
+              </button>
+              <button class="vsc-activity-item" data-act="scm" type="button" title="Source Control — Sürüm geçmişi">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <circle cx="7" cy="6" r="2.5"></circle>
+                  <circle cx="7" cy="18" r="2.5"></circle>
+                  <circle cx="17" cy="12" r="2.5"></circle>
+                  <line x1="7" y1="8.5" x2="7" y2="15.5"></line>
+                  <path d="M9.5 6H13a2 2 0 0 1 2 2v1.5"></path>
+                </svg>
+              </button>
+              <button class="vsc-activity-item" data-act="run" type="button" title="Run and Debug — Test sekmesi">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <polygon points="6 4 6 20 19 12"></polygon>
+                </svg>
+              </button>
+            </div>
+
+            <div class="vsc-activity-group">
+              <button class="vsc-activity-item" data-act="settings" type="button" title="Settings — Ortam değişkenleri">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <circle cx="12" cy="12" r="3"></circle>
+                  <path
+                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z">
+                  </path>
+                </svg>
+              </button>
+            </div>
           </div>
 
-          <div class="action-btn-group">
-            <button class="btn btn-secondary btn-run-code">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="5 3 19 12 5 21 5 3"></polygon>
-              </svg>
-              <span>Run Code</span>
-            </button>
-            <button class="btn btn-primary btn-deploy">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2v10m0 0l-4-4m4 4l4-4M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"></path>
-              </svg>
-              <span>Deploy</span>
-            </button>
-          </div>
-        </div>
+          <!-- Side Bar -->
+          <aside class="vsc-sidebar">
+            <div class="vsc-sidebar-title">Explorer</div>
 
-        <div class="code-ide-layout">
-          <!-- Editor Pane -->
-          <div class="ide-editor-container">
-            <div class="subtab-pane active" data-pane="editor">
-              <div class="editor-wrapper">
-                <div class="monaco-editor-instance workspace-main-editor"></div>
+            <div class="vsc-sidebar-body">
+              <!-- Files Section -->
+              <div class="vsc-section">
+                <button class="vsc-section-header" type="button">
+                  <svg class="vsc-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                    stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                  <span class="vsc-fn-folder-name">FUNCTION</span>
+                </button>
+                <div class="vsc-section-body">
+                  <div class="vsc-tree-row active explorer-file-entry">
+                    <span class="vsc-file-icon">
+                      <svg viewBox="0 0 24 24" width="16" height="16">
+                        <path fill="#387eb8"
+                          d="M11.91 2c-5.08 0-4.76 2.2-4.76 2.2l.01 2.28h4.84v.69H5.16S2 6.8 2 11.9c0 5.12 2.76 4.93 2.76 4.93h1.65v-2.32s-.09-2.76 2.71-2.76h4.69s2.58.04 2.58-2.5V4.57S16.8 2 11.91 2zm-2.6 1.48a.93.93 0 1 1 0 1.86.93.93 0 0 1 0-1.86z" />
+                        <path fill="#ffe052"
+                          d="M12.09 22c5.08 0 4.76-2.2 4.76-2.2l-.01-2.28H12v-.69h6.84S22 17.2 22 12.1c0-5.12-2.76-4.93-2.76-4.93h-1.65v2.32s.09 2.76-2.71 2.76H10.2s-2.58-.04-2.58 2.5v4.68s-.41 2.57 4.48 2.57zm2.6-1.48a.93.93 0 1 1 0-1.86.93.93 0 0 1 0 1.86z" />
+                      </svg>
+                    </span>
+                    <span class="vsc-entry-filename">handler.py</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Deploy Section (AWS Lambda Style) -->
+              <div class="vsc-section vsc-deploy-section">
+                <button class="vsc-section-header" type="button">
+                  <svg class="vsc-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                    stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                  <span>DEPLOY</span>
+                </button>
+                <div class="vsc-section-body vsc-deploy-actions">
+                  <button class="vsc-btn vsc-btn-deploy btn-deploy" type="button" title="Deploy">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                      stroke-width="2.5">
+                      <path d="M12 2v10m0 0l-4-4m4 4l4-4M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"></path>
+                    </svg>
+                    <span>Deploy</span>
+                  </button>
+                  <button class="vsc-btn vsc-btn-run btn-run-code" type="button" title="Run">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    <span>Run</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Environment Variables Section (AWS Lambda Style) -->
+              <div class="vsc-section vsc-env-section">
+                <button class="vsc-section-header" type="button">
+                  <svg class="vsc-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                    stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                  <span>ENVIRONMENT VARIABLES</span>
+                </button>
+                <div class="vsc-section-body">
+                  <div class="vsc-env-list env-rows-list"></div>
+                  <button class="vsc-btn vsc-btn-secondary btn-add-env" type="button">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    <span>Değişken Ekle</span>
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div class="subtab-pane hidden" data-pane="env">
-              <div class="env-vars-manager">
-                <div class="env-table-header">
-                  <span>Anahtar (Key)</span>
-                  <span>Değer (Value)</span>
-                  <span>İşlem</span>
+            <!-- Easter Egg: Official VakıfBank Animated Logo -->
+            <div class="vsc-easteregg vsc-bunny" aria-hidden="true">
+              <div class="vsc-vb-logo-wrap">
+                <!-- Ambient Glow Background -->
+                <div class="vsc-vb-glow-aura"></div>
+
+                <!-- Unified Centered Logo SVG: Emblem & Wordmark on the exact same axis -->
+                <div class="vsc-vb-svg-box">
+                  <svg class="vsc-vb-unified-svg" viewBox="0 -2 120 45" width="130" height="48">
+                    <defs>
+                      <linearGradient id="vb-gold-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stop-color="#ffd54f"/>
+                        <stop offset="45%" stop-color="#fbc34e"/>
+                        <stop offset="85%" stop-color="#f59e0b"/>
+                        <stop offset="100%" stop-color="#d97706"/>
+                      </linearGradient>
+                      <filter id="vb-depth" x="-10%" y="-10%" width="120%" height="120%">
+                        <feDropShadow dx="0" dy="1.2" stdDeviation="0.8" flood-color="#78350f" flood-opacity="0.4"/>
+                      </filter>
+                    </defs>
+
+                    <!-- Centered Emblem (Mathematically centered at X = 60.000) -->
+                    <g id="vb-emblem-group" transform="translate(46.48, 0)">
+                      <!-- Emblem Outer Gold Shape -->
+                      <path
+                        class="vsc-vb-emblem-path"
+                        d="M 24.687,8.707 C 24.939,7.271 23.617,5.27 20.018,5.27 H 11.075 C 8.624,5.27 7.087,6.953 6.814,8.648 L 5,18.184 c 1.593,-0.004 12.089,0 12.067,0 h 0.682 c 3.759,-0.021 5.923,-0.865 6.318,-3.593 0.262,-1.836 -1.35,-3.021 -2.667,-3.273 1.332,-0.243 2.951,-0.696 3.287,-2.611 z"
+                        fill="url(#vb-gold-grad)"
+                        filter="url(#vb-depth)"
+                        transform="matrix(1.356331,0,0,1.356331,-6.781655,-6.78214)"/>
+                      <!-- Emblem Inner Wing -->
+                      <path
+                        class="vsc-vb-wing"
+                        d="m 16.289,9.266 c -0.912,1.155 -4.227,5.164 -4.897,5.925 -1.497,1.703 -4.584,1.449 -4.605,1.406 0,-0.002 1.113,-5.265 1.474,-6.749 0.989,-4.035 4.401,-3.08 4.401,-3.08 0,0 -0.909,0.131 -1.551,0.95 -0.651,0.83 -1.389,4.874 -1.806,6.764 1.955,-2.285 4.635,-5.233 5.092,-5.785 1.948,-2.358 4.999,-2.033 4.999,-2.033 0,0 -1.188,0.166 -3.107,2.602 z"
+                        fill="#ffffff"
+                        transform="matrix(1.356331,0,0,1.356331,-6.781655,-6.78214)"/>
+                    </g>
+
+                    <!-- Centered Typography (Mathematically centered at X = 60.000) -->
+                    <g id="vb-text-group" transform="translate(-30.26, 23)">
+                      <path
+                        class="vsc-vb-wordmark"
+                        d="M 36.042,18.184 43.112,5.269 H 40.644 L 35.457,15.398 34.115,5.269 h -2.791 l 2.394,12.915 z m 10.935,-5.075 -0.75,4.063 c -0.461,0.037 -0.734,0.033 -1.549,0.017 -1.2,-0.026 -2.248,-0.521 -2.059,-1.733 0.26,-1.677 1.88,-2.16 4.358,-2.347 m 2.646,-1.176 c 0.448,-2.394 -1.404,-3.299 -3.652,-3.299 -1.468,0 -2.29,0.187 -3.16,0.544 l -0.731,1.427 c 1.072,-0.45 2.222,-0.583 3.187,-0.583 1.335,0 2.228,0.38 2.004,1.586 l -0.095,0.497 c -3.64,0.201 -6.577,1.033 -6.958,3.348 -0.275,1.668 1.482,2.856 4.4,2.856 1.515,0 2.827,-0.069 3.834,-0.146 z m 6.568,1.21 4.734,-4.254 h -2.622 l -4.46,4.245 1.481,-7.865 H 52.863 L 50.43,18.184 h 2.475 l 0.894,-4.791 2.953,4.776 h 2.897 z m 6.762,5.026 1.746,-9.28 h -2.338 l -1.743,9.28 z M 73.652,5.646 C 73.945,5.356 74.451,5.209 74.451,5.209 71.564,4.55 68.426,5.465 67.93,7.771 L 67.723,8.89 h -1.604 l -0.252,1.343 h 1.604 l -1.492,7.938 h 2.459 l 1.492,-7.938 h 1.862 L 72.053,8.89 H 70.18 l 0.135,-0.702 c 0.226,-1.189 0.638,-2.305 2.98,-1.925 0,-0.001 0.078,-0.354 0.357,-0.617 m 7.51,3.021 c -0.252,1.331 -1.287,2.119 -4.012,2.044 -0.785,-0.019 -0.978,-0.063 -0.978,-0.063 l 0.767,-4.052 c 0.504,-0.192 0.985,-0.299 1.699,-0.299 1.85,0 2.819,0.791 2.524,2.37 m -5.182,3.208 0.754,-0.025 c 3.063,-0.104 3.967,1.134 3.619,2.771 -0.334,1.565 -1.687,2.223 -3.519,2.223 -0.762,0 -1.16,-0.002 -1.821,-0.033 z m 7.817,-3.334 c 0.262,-1.478 -1.164,-3.539 -4.875,-3.539 -1.854,0 -4.363,0.424 -4.629,1.826 l -2.111,11.335 c 1.273,0.146 2.523,0.146 4.465,0.131 3.875,-0.02 6.105,-0.891 6.513,-3.696 0.271,-1.89 -1.392,-3.109 -2.748,-3.369 1.369,-0.251 3.039,-0.717 3.385,-2.688 m 6.877,4.568 -0.754,4.063 c -0.457,0.037 -0.73,0.033 -1.549,0.017 -1.201,-0.026 -2.246,-0.521 -2.055,-1.733 0.256,-1.677 1.881,-2.16 4.358,-2.347 m 2.64,-1.176 c 0.451,-2.394 -1.4,-3.299 -3.65,-3.299 -1.467,0 -2.303,0.184 -3.176,0.541 l -0.717,1.434 c 1.074,-0.444 2.225,-0.585 3.188,-0.585 1.334,0 2.232,0.38 2.004,1.586 l -0.094,0.497 c -3.637,0.201 -6.576,1.033 -6.957,3.348 -0.271,1.668 1.484,2.856 4.398,2.856 1.516,0 2.828,-0.069 3.834,-0.146 z m 10.766,-0.356 c 0.283,-1.501 -0.586,-2.846 -3.994,-2.846 -1.922,0 -3.34,0.308 -4.498,0.72 l -1.65,8.732 h 2.498 l 1.459,-7.793 c 0.506,-0.186 0.994,-0.328 1.842,-0.328 1.627,0 2.031,0.768 1.892,1.526 l -1.237,6.595 h 2.426 z m 4.055,1.53 -0.045,-0.012 1.471,-7.827 h -2.465 l -2.43,12.897 h 2.477 l 0.885,-4.717 h 0.039 l 2.92,4.733 h 2.896 l -3.452,-5.024 4.733,-4.255 h -2.621 z"
+                        fill="currentColor"
+                        transform="matrix(1.356331,0,0,1.356331,-6.781655,-6.78214)"/>
+                    </g>
+                  </svg>
+
+                  <!-- Glossy Light Shimmer Sweep across the emblem -->
+                  <div class="vsc-vb-shimmer-sweep"></div>
                 </div>
-                <div class="env-rows-list"></div>
-                <button class="btn btn-secondary btn-sm mt-3 btn-add-env">
-                  + Değişken Ekle
+              </div>
+            </div>
+          </aside>
+
+          <!-- Sidebar Drag Sash (Accessible even when collapsed) -->
+          <div class="vsc-sash" title="Kenar çubuğunu yeniden boyutlandır / genişlet"></div>
+
+          <!-- Editor Group -->
+          <div class="vsc-editor-group">
+            <div class="vsc-tabs">
+              <div class="vsc-tab active">
+                <span class="vsc-file-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16">
+                    <path fill="#387eb8"
+                      d="M11.91 2c-5.08 0-4.76 2.2-4.76 2.2l.01 2.28h4.84v.69H5.16S2 6.8 2 11.9c0 5.12 2.76 4.93 2.76 4.93h1.65v-2.32s-.09-2.76 2.71-2.76h4.69s2.58.04 2.58-2.5V4.57S16.8 2 11.91 2zm-2.6 1.48a.93.93 0 1 1 0 1.86.93.93 0 0 1 0-1.86z" />
+                    <path fill="#ffe052"
+                      d="M12.09 22c5.08 0 4.76-2.2 4.76-2.2l-.01-2.28H12v-.69h6.84S22 17.2 22 12.1c0-5.12-2.76-4.93-2.76-4.93h-1.65v2.32s.09 2.76-2.71 2.76H10.2s-2.58-.04-2.58 2.5v4.68s-.41 2.57 4.48 2.57zm2.6-1.48a.93.93 0 1 1 0-1.86.93.93 0 0 1 0 1.86z" />
+                  </svg>
+                </span>
+                <span class="vsc-tab-filename">handler.py</span>
+                <button class="vsc-tab-close" type="button" title="Tek dosyalı fonksiyon">×</button>
+              </div>
+
+              <!-- Top Bar Right Layout Controls (1, 2, 4) -->
+              <div class="vsc-layout-controls">
+                <!-- 1: Sol barı aç/kapat (File explorer) -->
+                <button class="vsc-icon-btn vsc-layout-btn active" data-layout-act="toggle-sidebar" type="button"
+                  title="Sol Paneli Aç/Kapat (Explorer)">
+                  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.2">
+                    <rect width="14" height="12" x="1" y="2" rx="1.5"></rect>
+                    <path d="M5.5 2v12"></path>
+                  </svg>
+                </button>
+                <!-- 2: Alt barı aç/kapat (Console/Output) -->
+                <button class="vsc-icon-btn vsc-layout-btn active" data-layout-act="toggle-panel" type="button"
+                  title="Alt Konsol Panelini Aç/Kapat (Output)">
+                  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.2">
+                    <rect width="14" height="12" x="1" y="2" rx="1.5"></rect>
+                    <path d="M1 9.5h14"></path>
+                  </svg>
+                </button>
+                <!-- 4: Kod ekranını tam sayfa / normal yap -->
+                <button class="vsc-icon-btn vsc-layout-btn" data-layout-act="toggle-fullscreen" type="button"
+                  title="Tam Ekran / Normal Görünüm">
+                  <svg class="vsc-icon-maximize" viewBox="0 0 16 16" width="14" height="14" fill="none"
+                    stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+                    <path
+                      d="M1.5 5.5V2a.5.5 0 0 1 .5-.5h3.5M14.5 5.5V2a.5.5 0 0 0-.5-.5h-3.5M1.5 10.5V14a.5.5 0 0 0 .5.5h3.5M14.5 10.5V14a.5.5 0 0 1-.5.5h-3.5">
+                    </path>
+                  </svg>
+                  <svg class="vsc-icon-restore hidden" viewBox="0 0 16 16" width="14" height="14" fill="none"
+                    stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+                    <path
+                      d="M5.5 1.5V5a.5.5 0 0 1-.5.5H1.5M10.5 1.5V5a.5.5 0 0 0 .5.5h3.5M5.5 14.5V11a.5.5 0 0 0-.5-.5H1.5M10.5 14.5V11a.5.5 0 0 1 .5-.5h3.5">
+                    </path>
+                  </svg>
                 </button>
               </div>
             </div>
-          </div>
 
-          <!-- Deploy Console Pane -->
-          <div class="ide-output-container">
-            <div class="output-header">
-              <span class="output-tab-title">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="4 17 10 11 4 5"></polyline>
-                  <line x1="12" y1="19" x2="20" y2="19"></line>
-                </svg>
-                Deploy Console
-              </span>
+            <div class="vsc-breadcrumbs">
+              <span class="vsc-crumb vsc-crumb-fn-name"></span>
+              <span class="vsc-crumb-sep"><svg viewBox="0 0 24 24" width="12" height="12" fill="none"
+                  stroke="currentColor" stroke-width="2">
+                  <polyline points="9 6 15 12 9 18"></polyline>
+                </svg></span>
+              <span class="vsc-crumb"><span class="vsc-file-icon"><svg viewBox="0 0 24 24" width="14" height="14">
+                    <path fill="#387eb8"
+                      d="M11.91 2c-5.08 0-4.76 2.2-4.76 2.2l.01 2.28h4.84v.69H5.16S2 6.8 2 11.9c0 5.12 2.76 4.93 2.76 4.93h1.65v-2.32s-.09-2.76 2.71-2.76h4.69s2.58.04 2.58-2.5V4.57S16.8 2 11.91 2zm-2.6 1.48a.93.93 0 1 1 0 1.86.93.93 0 0 1 0-1.86z" />
+                    <path fill="#ffe052"
+                      d="M12.09 22c5.08 0 4.76-2.2 4.76-2.2l-.01-2.28H12v-.69h6.84S22 17.2 22 12.1c0-5.12-2.76-4.93-2.76-4.93h-1.65v2.32s.09 2.76-2.71 2.76H10.2s-2.58-.04-2.58 2.5v4.68s-.41 2.57 4.48 2.57zm2.6-1.48a.93.93 0 1 1 0-1.86.93.93 0 0 1 0 1.86z" />
+                  </svg></span><span class="vsc-crumb-file">handler.py</span></span>
+              <span class="vsc-crumb-sep"><svg viewBox="0 0 24 24" width="12" height="12" fill="none"
+                  stroke="currentColor" stroke-width="2">
+                  <polyline points="9 6 15 12 9 18"></polyline>
+                </svg></span>
+              <span class="vsc-crumb">handler</span>
             </div>
-            <div class="console-body workspace-deploy-console">
-              <div class="console-line text-muted">Fonksiyonu cluster'da canlıya almak için "Deploy" butonuna basın.
+
+            <div class="vsc-editor">
+              <div class="monaco-editor-instance workspace-main-editor"></div>
+            </div>
+
+            <!-- Panel Horizontal Resize Sash (Accessible even when collapsed) -->
+            <div class="vsc-panel-sash" title="Alt paneli yeniden boyutlandır / aç"></div>
+
+            <!-- Panel (Output Console) -->
+            <div class="vsc-panel">
+              <div class="vsc-panel-header">
+                <div class="vsc-panel-tabs">
+                  <button class="vsc-panel-tab active" data-pane="output" type="button">Output</button>
+                </div>
+                <div class="vsc-panel-actions">
+                  <button class="vsc-icon-btn" data-panel-act="clear" type="button" title="Konsolu temizle">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                      stroke-width="1.8">
+                      <line x1="4" y1="6" x2="20" y2="6"></line>
+                      <line x1="4" y1="12" x2="14" y2="12"></line>
+                      <line x1="4" y1="18" x2="10" y2="18"></line>
+                    </svg>
+                  </button>
+                  <button class="vsc-icon-btn vsc-panel-maximize" data-panel-act="maximize" type="button"
+                    title="Paneli büyüt / küçült">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                      stroke-width="1.8">
+                      <polyline points="6 15 12 9 18 15"></polyline>
+                    </svg>
+                  </button>
+                  <button class="vsc-icon-btn" data-panel-act="close" type="button" title="Paneli kapat">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                      stroke-width="1.8">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div class="vsc-panel-body">
+                <div class="vsc-pane console-body workspace-deploy-console" data-pane="output">
+                  <div class="console-line text-muted">Kodu çalıştırmak için "Run", canlıya almak için "Deploy" butonuna
+                    basın.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Status Bar -->
+            <div class="vsc-statusbar">
+              <div class="vsc-status-group">
+                <span class="vsc-status-item vsc-status-deploy"></span>
+                <button class="vsc-status-item" data-panel-goto="output" type="button"
+                  title="Output konsolunu aç/kapat">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                  </svg>
+                  <span>Output</span>
+                </button>
+              </div>
+
+              <div class="vsc-status-group">
+                <span class="vsc-status-item vsc-status-cursor">Ln 1, Col 1</span>
+                <span class="vsc-status-item">Spaces: 4</span>
+                <span class="vsc-status-item">UTF-8</span>
+                <span class="vsc-status-item">LF</span>
+                <span class="vsc-status-item vsc-status-runtime">Python 3.11</span>
+                <span class="vsc-status-item">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                  </svg>
+                </span>
               </div>
             </div>
           </div>
